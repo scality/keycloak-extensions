@@ -11,6 +11,6 @@ USER 0
 
 COPY target/keycloak-extensions.jar $KEYCLOAK_DIR/providers/keycloak-extensions.jar
 
-RUN $KEYCLOAK_DIR/bin/kc.sh build --spi-hostname-provider=scality
+RUN $KEYCLOAK_DIR/bin/kc.sh build --spi-hostname-provider=default
 
 USER 1000

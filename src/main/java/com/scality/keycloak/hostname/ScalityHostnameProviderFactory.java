@@ -53,7 +53,11 @@ public class ScalityHostnameProviderFactory extends DefaultHostnameProviderFacto
 
     @Override
     public String getId() {
-        return "scality";
+        return "default";
     }
 
+    @Override
+    public int order() {
+        return 1;
+    }
 }
