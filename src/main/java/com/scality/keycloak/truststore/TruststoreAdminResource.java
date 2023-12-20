@@ -1,5 +1,7 @@
 package com.scality.keycloak.truststore;
 
+import java.security.cert.CertificateException;
+import java.security.cert.X509Certificate;
 import java.util.stream.Stream;
 
 import org.eclipse.microprofile.openapi.annotations.Operation;
@@ -8,11 +10,12 @@ import org.eclipse.microprofile.openapi.annotations.tags.Tag;
 import org.jboss.logging.Logger;
 import org.jboss.resteasy.annotations.cache.NoCache;
 import org.keycloak.models.KeycloakSession;
+import org.keycloak.representations.idm.CertificateRepresentation;
 import org.keycloak.services.resources.KeycloakOpenAPI;
 import org.keycloak.services.resources.admin.permissions.AdminPermissionEvaluator;
+import org.wildfly.security.x500.cert.X509CertificateBuilder;
 
 import jakarta.ws.rs.GET;
-import jakarta.ws.rs.Path;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.MediaType;
 
