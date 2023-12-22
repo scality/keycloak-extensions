@@ -1,13 +1,21 @@
 package com.scality.keycloak.truststore;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.security.KeyManagementException;
 import java.security.KeyStore;
 import java.security.KeyStoreException;
+import java.security.NoSuchAlgorithmException;
+import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
 import java.util.Map;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSocketFactory;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.TrustManagerFactory;
 import javax.security.auth.x500.X500Principal;
 
 import org.jboss.logging.Logger;
@@ -22,13 +30,9 @@ public class DBTruststoreProvider implements TruststoreProvider {
 
     private KeycloakSession session;
 
-    private SSLSocketFactory sslSocketFactory;
-
     public DBTruststoreProvider(KeycloakSession session) {
+        logger.info("DBTruststoreProvider constructor");
         this.session = session;
-        SSLSocketFactory jsseSSLSocketFactory = new JSSETruststoreConfigurator(this).getSSLSocketFactory();
-        this.sslSocketFactory = (jsseSSLSocketFactory != null) ? jsseSSLSocketFactory
-                : (SSLSocketFactory) javax.net.ssl.SSLSocketFactory.getDefault();
     }
 
     @Override
@@ -41,26 +45,46 @@ public class DBTruststoreProvider implements TruststoreProvider {
         return HostnameVerificationPolicy.WILDCARD;// Todo: make configurable
     }
 
+    private record SSLFactoryAndKeystore(SSLSocketFactory sslSocketFactory, KeyStore keystore) {
+
+    }
+
+    private SSLFactoryAndKeystore getSSLSocketFactoryAndKeyStore() {
+        try {
+            String trustStore = "truststore.jks";// todo ?
+            char[] password = "some password".toCharArray();// todo ?
+
+            TrustManagerFactory trustManagerFactory = TrustManagerFactory.getInstance("X509");
+            KeyStore keystore = KeyStore.getInstance(KeyStore.getDefaultType());
+            InputStream keystoreStream = DBTruststoreProvider.class.getResourceAsStream(trustStore);
+            keystore.load(keystoreStream, password);
+            CertificateTruststoreProvider provider = session.getProvider(CertificateTruststoreProvider.class);
+            CertificateRepresentation[] certs = provider.getCertificates();
+            for (CertificateRepresentation cert : certs) {
+                keystore.setCertificateEntry(cert.alias(), provider.toX509Certificate(cert));
+            }
+            trustManagerFactory.init(keystore);
+            TrustManager[] trustManagers = trustManagerFactory.getTrustManagers();
+            SSLContext sc = SSLContext.getInstance("SSL");
+            sc.init(null, trustManagers, null);
+            SSLContext.setDefault(sc);
+
+            return new SSLFactoryAndKeystore(sc.getSocketFactory(), keystore);
+        } catch (KeyStoreException | IOException | NoSuchAlgorithmException | CertificateException
+                | KeyManagementException e) {
+            logger.error("Error while loading truststore", e);
+            throw new RuntimeException(e);
+        }
+    }
+
     @Override
     public SSLSocketFactory getSSLSocketFactory() {
-        return sslSocketFactory;
+        return getSSLSocketFactoryAndKeyStore().sslSocketFactory();
     }
 
     @Override
     public KeyStore getTruststore() {
-        try {
-            KeyStore ks = KeyStore.getInstance("jks");
-            CertificateTruststoreProvider provider = session.getProvider(CertificateTruststoreProvider.class);
-            CertificateRepresentation[] certs = provider.getCertificates();
-            for (CertificateRepresentation cert : certs) {
-                ks.setCertificateEntry(cert.alias(), provider.toX509Certificate(cert));
-            }
-
-            return ks;
-        } catch (KeyStoreException e) {
-            logger.error("Error while loading truststore", e);
-            throw new RuntimeException(e);
-        }
+        return getSSLSocketFactoryAndKeyStore().keystore();
     }
 
     @Override
