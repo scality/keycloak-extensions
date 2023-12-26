@@ -36,7 +36,7 @@ jobs:
         with:
           push: true
           context: .
-          tags: ghcr.io/${{ github.repository }}/scality-keycloak:${{ github.sha }}
+          tags: ghcr.io/${{ github.repository }}/scality-keycloak:${{ github.ref_name }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           github-token: ${{ secrets.GITHUB_TOKEN }}
