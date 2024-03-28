@@ -1,1 +1,2 @@
 com.scality.keycloak.truststore.TruststoreJpaEntityProviderFactory
+com.scality.keycloak.groupFederationLink.GroupFederationLinkJpaEntityProviderFactory
