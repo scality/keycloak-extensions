@@ -1,5 +1,7 @@
 package com.scality.keycloak.groupFederationLink;
 
+import static org.keycloak.models.jpa.PaginationUtils.paginateQuery;
+
 import java.util.List;
 import java.util.Objects;
 import java.util.stream.Stream;
@@ -22,6 +24,7 @@ import org.keycloak.services.resources.admin.permissions.GroupPermissionEvaluato
 
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.NoResultException;
+import jakarta.persistence.TypedQuery;
 import jakarta.ws.rs.DefaultValue;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.Produces;
@@ -97,25 +100,17 @@ public class GroupWithLinkAdminResource {
         }
 
         try {
-            if (Objects.isNull(search) || search.isEmpty()) {
-                List<GroupEntity> resultList = getEntityManager()
-                        .createNamedQuery("findGroupsByFederationLink", GroupEntity.class)
-                        .setParameter("federationLink", federationLink).getResultList();
-                return resultList.stream().map(groupEntity -> {
-                    GroupWithLinkRepresentation groupFederationLinkEntity = new GroupWithLinkRepresentation();
-                    groupFederationLinkEntity.setId(groupEntity.getId());
-                    groupFederationLinkEntity.setName(groupEntity.getName());
-                    groupFederationLinkEntity.setParentId(groupEntity.getParentId());
-                    groupFederationLinkEntity.setFederationLink(federationLink);
-                    return groupFederationLinkEntity;
-                });
-            }
-
-            List<GroupEntity> resultList = getEntityManager()
+            TypedQuery<GroupEntity> query = getEntityManager()
                     .createNamedQuery("findGroupsByFederationLinkAndName", GroupEntity.class)
                     .setParameter("federationLink", federationLink)
-                    .setParameter("name", search)
-                    .getResultList();
+                    .setParameter("name", search);
+            if (Objects.isNull(search) || search.isEmpty()) {
+                query = getEntityManager()
+                        .createNamedQuery("findGroupsByFederationLink", GroupEntity.class)
+                        .setParameter("federationLink", federationLink);
+            }
+
+            List<GroupEntity> resultList = paginateQuery(query, firstResult, maxResults).getResultList();
             return resultList.stream().map(groupEntity -> {
                 GroupWithLinkRepresentation groupFederationLinkEntity = new GroupWithLinkRepresentation();
                 groupFederationLinkEntity.setId(groupEntity.getId());

@@ -6,8 +6,6 @@ import org.keycloak.component.ComponentModel;
 import org.keycloak.connections.jpa.JpaConnectionProvider;
 import org.keycloak.models.GroupModel;
 import org.keycloak.models.RealmModel;
-import org.keycloak.models.jpa.entities.GroupAttributeEntity;
-import org.keycloak.models.jpa.entities.GroupEntity;
 import org.keycloak.storage.ldap.LDAPStorageProvider;
 import org.keycloak.storage.ldap.mappers.membership.group.GroupLDAPStorageMapper;
 import org.keycloak.storage.ldap.mappers.membership.group.GroupLDAPStorageMapperFactory;
