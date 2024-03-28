@@ -1,0 +1,21 @@
+dn: ou=groups,dc=ldap,dc=local
+changetype: add
+objectClass: organizationalUnit
+ou: groups
+
+dn: ou=people,dc=ldap,dc=local
+changetype: add
+objectClass: organizationalUnit
+ou: people
+
+dn: cn=myGroup,ou=groups,dc=ldap,dc=local
+changetype: add
+objectClass: groupOfNames
+cn: myGroup
+member: cn=myPerson,ou=people,dc=ldap,dc=local
+
+dn: cn=myPerson,ou=people,dc=ldap,dc=local
+changetype: add
+objectClass: person
+cn: myPerson
+sn: LastName
