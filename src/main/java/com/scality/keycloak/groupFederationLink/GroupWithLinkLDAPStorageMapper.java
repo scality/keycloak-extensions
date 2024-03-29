@@ -1,7 +1,5 @@
 package com.scality.keycloak.groupFederationLink;
 
-import java.util.Collections;
-
 import org.keycloak.component.ComponentModel;
 import org.keycloak.connections.jpa.JpaConnectionProvider;
 import org.keycloak.models.GroupModel;

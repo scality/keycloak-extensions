@@ -325,7 +325,6 @@ public class GroupWithLinkTest {
 
             try (KeycloakContainer keycloak = FullImageName.createContainer()
                     .withNetwork(network)
-                    .withEnv("KC_LOG_LEVEL", "DEBUG")
                     .withStartupTimeout(Duration.ofMinutes(5))
                     .withLogConsumer(new Slf4jLogConsumer(logger))
                     .withProviderClassesFrom("target/classes")) {

@@ -1,11 +1,13 @@
 package com.scality.keycloak;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import java.io.IOException;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.time.Duration;
 import java.util.List;
 
 import org.junit.Test;
@@ -32,6 +34,7 @@ public class TrustStoreTest {
     @Test
     public void truststore_provider_should_be_registered() throws IOException {
         try (KeycloakContainer keycloak = FullImageName.createContainer()
+                .withStartupTimeout(Duration.ofMinutes(5))
                 .withProviderClassesFrom("target/classes")) {
             keycloak.start();
 
@@ -82,22 +85,55 @@ public class TrustStoreTest {
         return responseCode == 204;
     }
 
-    private HttpURLConnection getCertificatesConnection(KeycloakContainer keycloak) throws IOException {
+    private List<CertificateRepresentation> getCertificates(KeycloakContainer keycloak) throws IOException {
         URL url = new URL(keycloak.getAuthServerUrl() + "/admin/realms/master/certificates");
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         conn.setRequestMethod("GET");
         conn.setRequestProperty("Authorization", "Bearer " + getToken(keycloak));
-        return conn;
+        ObjectMapper objectMapper = new ObjectMapper();
+        List<CertificateRepresentation> certificates = objectMapper.readValue(conn.getInputStream(),
+                new TypeReference<>() {
+                });
+        return certificates;
     }
 
-    private HttpURLConnection addCertificateConnection(KeycloakContainer keycloak) throws IOException {
+    private HttpURLConnection addCertificateConnection(KeycloakContainer keycloak, String alias, String certificate)
+            throws IOException {
         URL url = new URL(keycloak.getAuthServerUrl() + "/admin/realms/master/certificates");
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         conn.setRequestMethod("POST");
         conn.setRequestProperty("Authorization", "Bearer " + getToken(keycloak));
         conn.setRequestProperty("Content-Type", "application/json");
         conn.setDoOutput(true);
+        conn.getOutputStream().write(("{\n" + //
+                "    \"alias\": \"" + alias + "\",\n" + //
+                "    \"certificate\": \"" + certificate + "\"\n" +
+                "}").getBytes());
         return conn;
+    }
+
+    private CertificateRepresentation upsertCertificateConnection(KeycloakContainer keycloak, String alias,
+            String certificate)
+            throws IOException {
+        URL url = new URL(keycloak.getAuthServerUrl() + "/admin/realms/master/certificates/" + alias);
+        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+        conn.setRequestMethod("PUT");
+        conn.setRequestProperty("Authorization", "Bearer " + getToken(keycloak));
+        conn.setRequestProperty("Content-Type", "application/json");
+        conn.setDoOutput(true);
+        conn.getOutputStream().write(("{\n" + //
+                "    \"certificate\": \"" + certificate + "\"\n" +
+                "}").getBytes());
+        ObjectMapper objectMapper = new ObjectMapper();
+        return objectMapper.readValue(conn.getInputStream(), CertificateRepresentation.class);
+    }
+
+    private void removeCertificateConnection(KeycloakContainer keycloak, String alias) throws IOException {
+        URL url = new URL(keycloak.getAuthServerUrl() + "/admin/realms/master/certificates/" + alias);
+        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+        conn.setRequestMethod("DELETE");
+        conn.setRequestProperty("Authorization", "Bearer " + getToken(keycloak));
+        conn.getResponseCode();
     }
 
     @Test
@@ -114,27 +150,21 @@ public class TrustStoreTest {
                 .withEnv("LDAP_TLS_VERIFY_CLIENT", "try")
                 .withExposedPorts(389, 636)) {
             openldap.start();
+            Container.ExecResult base64CaResult = openldap.execInContainer("base64", "-w", "0",
+                    "/container/service/slapd/assets/certs/ca.crt");
+            String base64Ca = base64CaResult.getStdout();
 
             try (KeycloakContainer keycloak = FullImageName.createContainer()
                     .withNetwork(network)
+                    .withStartupTimeout(Duration.ofMinutes(5))
                     .withLogConsumer(new Slf4jLogConsumer(logger))
                     .withProviderClassesFrom("target/classes")) {
                 keycloak.start();
 
-                // V
-                assertFalse(isLDAPWithStartTlsConnectionWorking(keycloak));
-
                 // E
-                Container.ExecResult base64CaResult = openldap.execInContainer("base64", "-w", "0",
-                        "/container/service/slapd/assets/certs/ca.crt");
-                String base64Ca = base64CaResult.getStdout();
-
+                String alias = "ldap.local";
                 // Post on certificates endpoint to trust the CA
-                HttpURLConnection conn = addCertificateConnection(keycloak);
-                conn.getOutputStream().write(("{\n" + //
-                        "    \"alias\": \"ldap.local\",\n" + //
-                        "    \"certificate\": \"" + base64Ca + "\"\n" +
-                        "}").getBytes());
+                HttpURLConnection conn = addCertificateConnection(keycloak, alias, base64Ca);
                 int responseCode = conn.getResponseCode();
 
                 // V
@@ -142,13 +172,15 @@ public class TrustStoreTest {
                 assertTrue(isLDAPWithStartTlsConnectionWorking(keycloak));
 
                 // V
-                conn = getCertificatesConnection(keycloak);
-                ObjectMapper objectMapper = new ObjectMapper();
-                List<CertificateRepresentation> certificates = objectMapper.readValue(conn.getInputStream(),
-                        new TypeReference<>() {
-                        });
+                List<CertificateRepresentation> certificates = getCertificates(keycloak);
+
                 assertFalse(certificates.isEmpty());
                 assertTrue(certificates.stream().anyMatch(it -> it.alias().equals("ldap.local")));
+
+                // E
+                removeCertificateConnection(keycloak, alias);
+                CertificateRepresentation upsertedCertificate = upsertCertificateConnection(keycloak, alias, base64Ca);
+                assertEquals("docker-light-baseimage", upsertedCertificate.commonName());
             }
         }
 

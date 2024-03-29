@@ -6,11 +6,17 @@ import java.security.NoSuchAlgorithmException;
 import java.security.NoSuchProviderException;
 import java.security.PublicKey;
 import java.security.SignatureException;
+import java.security.cert.CertificateEncodingException;
 import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
 import java.util.Base64;
 
+import org.bouncycastle.asn1.x500.RDN;
+import org.bouncycastle.asn1.x500.X500Name;
+import org.bouncycastle.asn1.x500.style.BCStyle;
+import org.bouncycastle.asn1.x500.style.IETFUtils;
+import org.bouncycastle.cert.jcajce.JcaX509CertificateHolder;
 import org.jboss.logging.Logger;
 import org.keycloak.connections.jpa.JpaConnectionProvider;
 import org.keycloak.models.KeycloakSession;
@@ -45,13 +51,27 @@ public class JpaCertificateTruststoreProvider implements CertificateTruststorePr
     }
 
     private CertificateRepresentation toCertificateRepresentation(TruststoreEntity entity) {
-        CertificateRepresentation certificate = new CertificateRepresentation(
-                entity.getId(),
-                entity.getAlias(),
-                entity.getCertificate(),
-                entity.isRootCA());
+        X509Certificate x509Certificate = toX509Certificate(entity.getCertificate());
+        try {
+            X500Name x500name = new JcaX509CertificateHolder(x509Certificate).getSubject();
+            RDN cn = x500name.getRDNs(BCStyle.CN)[0];
 
-        return certificate;
+            CertificateRepresentation certificate = new CertificateRepresentation(
+                    entity.getAlias(),
+                    entity.getCertificate(),
+                    IETFUtils.valueToString(cn.getFirst().getValue()));
+
+            return certificate;
+
+        } catch (CertificateEncodingException e) {
+            logger.error("certificate " + entity.getAlias() + " is invalid", e);
+            CertificateRepresentation certificate = new CertificateRepresentation(
+                    entity.getAlias(),
+                    entity.getCertificate(),
+                    "");
+            return certificate;
+        }
+
     }
 
     @Override
@@ -127,11 +147,14 @@ public class JpaCertificateTruststoreProvider implements CertificateTruststorePr
 
     @Override
     public CertificateRepresentation updateCertificate(String alias, String certificate) {
-        CertificateRepresentation certificateRepresentation = this.getCertificate(alias);
-        X509Certificate x509Certificate = toX509Certificate(certificate);
+        TruststoreEntity storedCertificate = getEntityManager()
+                .createNamedQuery("findByAlias", TruststoreEntity.class)
+                .setParameter("alias", alias)
+                .getSingleResult();
+        X509Certificate x509Certificate = toX509Certificate(storedCertificate.getCertificate());
 
         TruststoreEntity entity = new TruststoreEntity();
-        entity.setId(certificateRepresentation.id());
+        entity.setId(storedCertificate.getId());
         entity.setAlias(alias);
         entity.setCertificate(certificate);
         entity.setRootCA(isSelfSigned(x509Certificate));
