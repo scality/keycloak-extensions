@@ -12,11 +12,8 @@ import java.util.stream.Stream;
 
 import org.apache.commons.io.IOUtils;
 import org.junit.Test;
-import org.keycloak.admin.client.Keycloak;
-import org.keycloak.representations.AccessTokenResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.testcontainers.containers.Container;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.Network;
 import org.testcontainers.containers.output.Slf4jLogConsumer;
@@ -33,19 +30,14 @@ record ProviderAndMapper(String providerID, String mapperID) {
 public class GroupWithLinkTest {
 
     private Logger logger = LoggerFactory.getLogger(GroupWithLinkTest.class);
-
-    private String getToken(KeycloakContainer keycloak) {
-        Keycloak keycloakClient = keycloak.getKeycloakAdminClient();
-        AccessTokenResponse accessTokenResponse = keycloakClient.tokenManager().getAccessToken();
-        return accessTokenResponse.getToken();
-    }
+    private TokenProvider tokenProvider = new TokenProvider();
 
     private ProviderAndMapper createLdapConfigurationAndLdapGroupMapper(KeycloakContainer keycloak) throws IOException {
         /// Retrieve Master realm id
         URL urlMasterRealm = new URL(keycloak.getAuthServerUrl() + "/admin/realms/master");
         HttpURLConnection connMasterRealm = (HttpURLConnection) urlMasterRealm.openConnection();
         connMasterRealm.setRequestMethod("GET");
-        connMasterRealm.setRequestProperty("Authorization", "Bearer " + getToken(keycloak));
+        connMasterRealm.setRequestProperty("Authorization", "Bearer " + tokenProvider.getToken(keycloak));
         int responseCodeMasterRealm = connMasterRealm.getResponseCode();
         if (responseCodeMasterRealm != 200) {
             System.out.println("Get Master Realm responseCode = " + responseCodeMasterRealm);
@@ -66,7 +58,7 @@ public class GroupWithLinkTest {
         URL url = new URL(keycloak.getAuthServerUrl() + "/admin/realms/master/components");
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         conn.setRequestMethod("POST");
-        conn.setRequestProperty("Authorization", "Bearer " + getToken(keycloak));
+        conn.setRequestProperty("Authorization", "Bearer " + tokenProvider.getToken(keycloak));
         conn.setRequestProperty("Content-Type", "application/json");
         conn.setDoOutput(true);
         conn.getOutputStream().write(
@@ -179,7 +171,7 @@ public class GroupWithLinkTest {
         url = new URL(keycloak.getAuthServerUrl() + "/admin/realms/master/components");
         conn = (HttpURLConnection) url.openConnection();
         conn.setRequestMethod("POST");
-        conn.setRequestProperty("Authorization", "Bearer " + getToken(keycloak));
+        conn.setRequestProperty("Authorization", "Bearer " + tokenProvider.getToken(keycloak));
         conn.setRequestProperty("Content-Type", "application/json");
         conn.setDoOutput(true);
         conn.getOutputStream().write(
@@ -250,7 +242,7 @@ public class GroupWithLinkTest {
                         + "/mappers/" + providerAndMapper.mapperID() + "/sync?direction=fedToKeycloak");
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         conn.setRequestMethod("POST");
-        conn.setRequestProperty("Authorization", "Bearer " + getToken(keycloak));
+        conn.setRequestProperty("Authorization", "Bearer " + tokenProvider.getToken(keycloak));
         conn.setRequestProperty("Content-Type", "application/json");
         conn.setDoOutput(true);
         conn.getOutputStream().write("{}".getBytes());
@@ -278,7 +270,7 @@ public class GroupWithLinkTest {
                         + "&search=" + search);
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         conn.setRequestMethod("GET");
-        conn.setRequestProperty("Authorization", "Bearer " + getToken(keycloak));
+        conn.setRequestProperty("Authorization", "Bearer " + tokenProvider.getToken(keycloak));
 
         int responseCode = conn.getResponseCode();
 
@@ -344,7 +336,7 @@ public class GroupWithLinkTest {
                         keycloak.getAuthServerUrl() + "/admin/realms/master/groups");
                 HttpURLConnection connLocalGroup = (HttpURLConnection) urlLocalGroup.openConnection();
                 connLocalGroup.setRequestMethod("POST");
-                connLocalGroup.setRequestProperty("Authorization", "Bearer " + getToken(keycloak));
+                connLocalGroup.setRequestProperty("Authorization", "Bearer " + tokenProvider.getToken(keycloak));
                 connLocalGroup.setRequestProperty("Content-Type", "application/json");
                 connLocalGroup.setDoOutput(true);
                 connLocalGroup.getOutputStream().write(
