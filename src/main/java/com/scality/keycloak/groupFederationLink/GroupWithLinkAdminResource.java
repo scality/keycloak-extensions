@@ -135,10 +135,7 @@ public class GroupWithLinkAdminResource {
     @Tag(name = KeycloakOpenAPI.Admin.Tags.GROUPS)
     @Operation(summary = "Get groups")
     public Map<String, Long> countGroupsWithLink(@QueryParam("search") String search,
-            @QueryParam("link") String federationLink,
-            @QueryParam("exact") @DefaultValue("false") Boolean exact,
-            @QueryParam("first") Integer firstResult,
-            @QueryParam("max") Integer maxResults) {
+            @QueryParam("link") String federationLink) {
 
         GroupPermissionEvaluator groupsEvaluator = auth.groups();
         groupsEvaluator.requireList();
