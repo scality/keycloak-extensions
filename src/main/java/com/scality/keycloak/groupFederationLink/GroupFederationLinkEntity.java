@@ -19,6 +19,8 @@ import jakarta.persistence.UniqueConstraint;
         @NamedQuery(name = "findByGroupId", query = "select t from GroupFederationLinkEntity t where t.groupId = :groupId"),
         @NamedQuery(name = "findGroupsByFederationLinkAndName", query = "select g from GroupFederationLinkEntity gl, GroupEntity g where gl.groupId = g.id and g.name like concat('%',:name,'%') and gl.federationLink = :federationLink"),
         @NamedQuery(name = "findGroupsByFederationLink", query = "select g from GroupFederationLinkEntity gl, GroupEntity g where gl.groupId = g.id and gl.federationLink = :federationLink"),
+        @NamedQuery(name = "countGroupsByFederationLinkAndName", query = "select count(g) from GroupFederationLinkEntity gl, GroupEntity g where gl.groupId = g.id and g.name like concat('%',:name,'%') and gl.federationLink = :federationLink"),
+        @NamedQuery(name = "countGroupsByFederationLink", query = "select count(g) from GroupFederationLinkEntity gl, GroupEntity g where gl.groupId = g.id and gl.federationLink = :federationLink"),
 })
 public class GroupFederationLinkEntity {
 

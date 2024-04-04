@@ -8,6 +8,8 @@ import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.time.Duration;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.stream.Stream;
 
 import org.apache.commons.io.IOUtils;
@@ -19,6 +21,7 @@ import org.testcontainers.containers.Network;
 import org.testcontainers.containers.output.Slf4jLogConsumer;
 import org.testcontainers.utility.MountableFile;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.scality.keycloak.groupFederationLink.GroupWithLinkRepresentation;
 
@@ -262,6 +265,37 @@ public class GroupWithLinkTest {
         }
     }
 
+    private Long countGroupsWithLink(KeycloakContainer keycloak, String federationLink) throws IOException {
+        URL url = new URL(
+                keycloak.getAuthServerUrl() + "/admin/realms/master/groups-with-link/count?link="
+                        + federationLink);
+        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+        conn.setRequestMethod("GET");
+        conn.setRequestProperty("Authorization", "Bearer " + tokenProvider.getToken(keycloak));
+
+        int responseCode = conn.getResponseCode();
+
+        if (responseCode != 200) {
+            System.out.println("responseCode = " + responseCode);
+            InputStream errorStream = conn.getErrorStream();
+            if (errorStream != null) {
+                byte[] buffer = new byte[1024];
+                int bytesRead;
+                while ((bytesRead = errorStream.read(buffer)) != -1) {
+                    System.out.write(buffer, 0, bytesRead);
+                }
+            }
+            return 0L;
+        }
+
+        String responsePayload = IOUtils.toString(conn.getInputStream(), "UTF-8");
+        ObjectMapper objectMapper = new ObjectMapper();
+        TypeReference<HashMap<String, Long>> typeRef = new TypeReference<HashMap<String, Long>>() {
+        };
+        Map<String, Long> result = objectMapper.readValue(responsePayload, typeRef);
+        return result.get("count");
+    }
+
     private Stream<GroupWithLinkRepresentation> getGroupsWithLink(KeycloakContainer keycloak, String federationLink,
             String search)
             throws IOException {
@@ -358,6 +392,10 @@ public class GroupWithLinkTest {
                 groupsWithLink = getGroupsWithLink(keycloak, providerAndMapper.providerID(), "myGroup1");
                 System.out.println(groupsWithLink);
                 assertEquals(0, groupsWithLink.count());
+
+                Long count = countGroupsWithLink(keycloak, providerAndMapper.providerID());
+                Long expectedLong = 1L;
+                assertEquals(expectedLong, count);
             }
         }
 

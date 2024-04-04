@@ -2,7 +2,9 @@ package com.scality.keycloak.groupFederationLink;
 
 import static org.keycloak.models.jpa.PaginationUtils.paginateQuery;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.stream.Stream;
 
@@ -27,6 +29,7 @@ import jakarta.persistence.NoResultException;
 import jakarta.persistence.TypedQuery;
 import jakarta.ws.rs.DefaultValue;
 import jakarta.ws.rs.GET;
+import jakarta.ws.rs.Path;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
@@ -70,7 +73,7 @@ public class GroupWithLinkAdminResource {
         logger.info("getGroupsWithLink");
 
         if (Objects.isNull(federationLink) || federationLink.isEmpty()) {
-            Stream<GroupRepresentation> groups = groupsResource.getGroups(search, search, exact, firstResult,
+            Stream<GroupRepresentation> groups = groupsResource.getGroups(search, null, exact, firstResult,
                     maxResults, true, true);
 
             return groups.map(group -> {
@@ -122,6 +125,51 @@ public class GroupWithLinkAdminResource {
         } catch (NoResultException e) {
             logger.trace("No group found for federation link " + federationLink, e);
             return Stream.empty();
+        }
+    }
+
+    @GET
+    @Path("count")
+    @NoCache
+    @Produces(MediaType.APPLICATION_JSON)
+    @Tag(name = KeycloakOpenAPI.Admin.Tags.GROUPS)
+    @Operation(summary = "Get groups")
+    public Map<String, Long> countGroupsWithLink(@QueryParam("search") String search,
+            @QueryParam("link") String federationLink,
+            @QueryParam("exact") @DefaultValue("false") Boolean exact,
+            @QueryParam("first") Integer firstResult,
+            @QueryParam("max") Integer maxResults) {
+
+        GroupPermissionEvaluator groupsEvaluator = auth.groups();
+        groupsEvaluator.requireList();
+        logger.info("getGroupsWithLink");
+
+        if (Objects.isNull(federationLink) || federationLink.isEmpty()) {
+            Map<String, Long> count = groupsResource.getGroupCount(search, false);
+
+            return count;
+        }
+
+        try {
+            TypedQuery<Long> query = getEntityManager()
+                    .createNamedQuery("countGroupsByFederationLinkAndName", Long.class)
+                    .setParameter("federationLink", federationLink)
+                    .setParameter("name", search);
+            if (Objects.isNull(search) || search.isEmpty()) {
+                query = getEntityManager()
+                        .createNamedQuery("countGroupsByFederationLink", Long.class)
+                        .setParameter("federationLink", federationLink);
+            }
+
+            Long count = query.getSingleResult();
+            Map<String, Long> result = new HashMap<>();
+            result.put("count", count);
+            return result;
+        } catch (NoResultException e) {
+            logger.trace("No group found for federation link " + federationLink, e);
+            Map<String, Long> result = new HashMap<>();
+            result.put("count", 0L);
+            return result;
         }
     }
 
