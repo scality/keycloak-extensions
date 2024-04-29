@@ -20,7 +20,7 @@ import javax.security.auth.x500.X500Principal;
 
 import org.jboss.logging.Logger;
 import org.keycloak.models.KeycloakSession;
-import org.keycloak.truststore.HostnameVerificationPolicy;
+import org.keycloak.common.enums.HostnameVerificationPolicy;
 import org.keycloak.truststore.TruststoreProvider;
 
 public class DBTruststoreProvider implements TruststoreProvider {
