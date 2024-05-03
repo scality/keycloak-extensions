@@ -29,10 +29,12 @@ public class GroupWithLinkLDAPStorageMapper extends GroupLDAPStorageMapper {
     protected GroupModel createKcGroup(RealmModel realm, String ldapGroupName, GroupModel parentGroup) {
         GroupModel groupModel = super.createKcGroup(realm, ldapGroupName, parentGroup);
 
+        EntityManager em = getEntityManager();
         GroupFederationLinkEntity groupFederationLinkEntity = new GroupFederationLinkEntity();
         groupFederationLinkEntity.setGroupId(groupModel.getId());
         groupFederationLinkEntity.setFederationLink(ldapProvider.getModel().getId());
-        getEntityManager().persist(groupFederationLinkEntity);
+        em.persist(groupFederationLinkEntity);
+        em.flush();
 
         return groupModel;
     }
