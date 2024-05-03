@@ -1,2 +1,3 @@
 com.scality.keycloak.truststore.TruststoreAdminResourceProvider
 com.scality.keycloak.groupFederationLink.GroupWithLinkAdminResourceProvider
+com.scality.keycloak.groupSync.GroupSyncAdminResourceProvider
