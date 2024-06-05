@@ -178,9 +178,6 @@ public class GroupWithLinkAdminResource {
     @Operation(summary = "Find group")
     public GroupWithLinkRepresentation findGroupWithLink(@PathParam("group-id") String id) {
         GroupResource group = groupsResource.getGroupById(id);
-        if (group == null) {
-            throw new NotFoundException("Could not find group by id");
-        }
 
         GroupWithLinkRepresentation groupWithLink = new GroupWithLinkRepresentation();
 
@@ -189,6 +186,16 @@ public class GroupWithLinkAdminResource {
                     .createNamedQuery("findByGroupId", GroupFederationLinkEntity.class)
                     .setParameter("groupId", id)
                     .getSingleResult();
+
+            groupWithLink.setId(group.getGroup().getId());
+            groupWithLink.setName(group.getGroup().getName());
+            groupWithLink.setPath(group.getGroup().getPath());
+            groupWithLink.setParentId(group.getGroup().getParentId());
+            groupWithLink.setSubGroupCount(group.getGroup().getSubGroupCount());
+            groupWithLink.setSubGroups(group.getGroup().getSubGroups());
+            groupWithLink.setAttributes(group.getGroup().getAttributes());
+            groupWithLink.setRealmRoles(group.getGroup().getRealmRoles());
+            groupWithLink.setClientRoles(group.getGroup().getClientRoles());
             groupWithLink.setFederationLink(groupFederationLinkEntity.getFederationLink());
         } catch (NoResultException e) {
             logger.trace("No federation link found for group " + id, e);
