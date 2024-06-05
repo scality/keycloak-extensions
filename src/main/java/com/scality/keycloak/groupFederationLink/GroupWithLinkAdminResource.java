@@ -173,6 +173,7 @@ public class GroupWithLinkAdminResource {
         }
     }
 
+    @GET
     @Path("{group-id}")
     @Operation(summary = "Find group")
     public GroupWithLinkRepresentation findGroupWithLink(@PathParam("group-id") String id) {
