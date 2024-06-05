@@ -20,6 +20,7 @@ import org.keycloak.models.jpa.entities.GroupEntity;
 import org.keycloak.representations.idm.GroupRepresentation;
 import org.keycloak.services.resources.KeycloakOpenAPI;
 import org.keycloak.services.resources.admin.AdminEventBuilder;
+import org.keycloak.services.resources.admin.GroupResource;
 import org.keycloak.services.resources.admin.GroupsResource;
 import org.keycloak.services.resources.admin.permissions.AdminPermissionEvaluator;
 import org.keycloak.services.resources.admin.permissions.GroupPermissionEvaluator;
@@ -29,10 +30,12 @@ import jakarta.persistence.NoResultException;
 import jakarta.persistence.TypedQuery;
 import jakarta.ws.rs.DefaultValue;
 import jakarta.ws.rs.GET;
+import jakarta.ws.rs.NotFoundException;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.PathParam;
 
 @Extension(name = KeycloakOpenAPI.Profiles.ADMIN, value = "")
 public class GroupWithLinkAdminResource {
@@ -170,4 +173,26 @@ public class GroupWithLinkAdminResource {
         }
     }
 
+    @Path("{group-id}")
+    @Operation(summary = "Find group")
+    public GroupWithLinkRepresentation findGroupWithLink(@PathParam("group-id") String id) {
+        GroupResource group = groupsResource.getGroupById(id);
+        if (group == null) {
+            throw new NotFoundException("Could not find group by id");
+        }
+
+        GroupWithLinkRepresentation groupWithLink = new GroupWithLinkRepresentation();
+
+        try {
+            GroupFederationLinkEntity groupFederationLinkEntity = getEntityManager()
+                    .createNamedQuery("findByGroupId", GroupFederationLinkEntity.class)
+                    .setParameter("groupId", id)
+                    .getSingleResult();
+            groupWithLink.setFederationLink(groupFederationLinkEntity.getFederationLink());
+        } catch (NoResultException e) {
+            logger.trace("No federation link found for group " + id, e);
+        }
+        return groupWithLink;
+
+    }
 }
