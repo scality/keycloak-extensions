@@ -465,7 +465,50 @@ public class GroupWithLinkTest {
                 // V
                 GroupWithLinkRepresentation groupWithLink = findGroupWithLink(keycloak, ldapGroupId);
                 assertEquals(providerAndMapper.providerID(), groupWithLink.getFederationLink());
+                assertEquals(ldapGroupId, groupWithLink.getId());
+                assertTrue(groupWithLink.getName().startsWith("myGroup"));
+
             }
+        }
+    }
+
+    @Test
+    public void group_with_link_should_return_non_ldap_group_when_findGroup()
+            throws IOException, UnsupportedOperationException, InterruptedException {
+        Network network = Network.newNetwork();
+        // S
+
+        // Create some Keycloak groups
+        try (KeycloakContainer keycloak = FullImageName.createContainer()
+                .withNetwork(network)
+                .withStartupTimeout(Duration.ofMinutes(5))
+                .withLogConsumer(new Slf4jLogConsumer(logger))
+                .withProviderClassesFrom("target/classes")) {
+            keycloak.start();
+
+            // Create a local group
+            URL urlLocalGroup = new URL(
+                    keycloak.getAuthServerUrl() + "/admin/realms/master/groups");
+            HttpURLConnection connLocalGroup = (HttpURLConnection) urlLocalGroup.openConnection();
+            connLocalGroup.setRequestMethod("POST");
+            connLocalGroup.setRequestProperty("Authorization", "Bearer " + tokenProvider.getToken(keycloak));
+            connLocalGroup.setRequestProperty("Content-Type", "application/json");
+            connLocalGroup.setDoOutput(true);
+            connLocalGroup.getOutputStream().write(
+                    ("{\n" + //
+                            "  \"name\": \"local-group\"\n" + //
+                            "}").getBytes());
+            connLocalGroup.getOutputStream().close();
+            connLocalGroup.getResponseCode();
+
+            Stream<GroupWithLinkRepresentation> groupsWithLink = getGroupsWithLink(keycloak, "", "");
+            String localGroupId = groupsWithLink.findFirst().get().getId();
+            // V
+            GroupWithLinkRepresentation groupWithLink = findGroupWithLink(keycloak, localGroupId);
+            assertEquals(null, groupWithLink.getFederationLink());
+            assertEquals(localGroupId, groupWithLink.getId());
+            assertEquals("local-group", groupWithLink.getName());
+
         }
 
     }
