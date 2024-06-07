@@ -20,6 +20,7 @@ import org.keycloak.models.jpa.entities.GroupEntity;
 import org.keycloak.representations.idm.GroupRepresentation;
 import org.keycloak.services.resources.KeycloakOpenAPI;
 import org.keycloak.services.resources.admin.AdminEventBuilder;
+import org.keycloak.services.resources.admin.GroupResource;
 import org.keycloak.services.resources.admin.GroupsResource;
 import org.keycloak.services.resources.admin.permissions.AdminPermissionEvaluator;
 import org.keycloak.services.resources.admin.permissions.GroupPermissionEvaluator;
@@ -29,10 +30,12 @@ import jakarta.persistence.NoResultException;
 import jakarta.persistence.TypedQuery;
 import jakarta.ws.rs.DefaultValue;
 import jakarta.ws.rs.GET;
+import jakarta.ws.rs.NotFoundException;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.PathParam;
 
 @Extension(name = KeycloakOpenAPI.Profiles.ADMIN, value = "")
 public class GroupWithLinkAdminResource {
@@ -170,4 +173,37 @@ public class GroupWithLinkAdminResource {
         }
     }
 
+    @GET
+    @Path("{group-id}")
+    @Operation(summary = "Find group")
+    public GroupWithLinkRepresentation findGroupWithLink(@PathParam("group-id") String id) {
+        GroupPermissionEvaluator groupsEvaluator = auth.groups();
+        groupsEvaluator.requireView();
+        logger.info("findGroupWithLink");
+
+        GroupResource group = groupsResource.getGroupById(id);
+
+        GroupWithLinkRepresentation groupWithLink = new GroupWithLinkRepresentation();
+
+        groupWithLink.setId(group.getGroup().getId());
+        groupWithLink.setName(group.getGroup().getName());
+        groupWithLink.setPath(group.getGroup().getPath());
+        groupWithLink.setParentId(group.getGroup().getParentId());
+        groupWithLink.setSubGroupCount(group.getGroup().getSubGroupCount());
+        groupWithLink.setSubGroups(group.getGroup().getSubGroups());
+        groupWithLink.setAttributes(group.getGroup().getAttributes());
+        groupWithLink.setRealmRoles(group.getGroup().getRealmRoles());
+        groupWithLink.setClientRoles(group.getGroup().getClientRoles());
+        try {
+            GroupFederationLinkEntity groupFederationLinkEntity = getEntityManager()
+                    .createNamedQuery("findByGroupId", GroupFederationLinkEntity.class)
+                    .setParameter("groupId", id)
+                    .getSingleResult();
+            groupWithLink.setFederationLink(groupFederationLinkEntity.getFederationLink());
+        } catch (NoResultException e) {
+            logger.trace("No federation link found for group " + id, e);
+        }
+        return groupWithLink;
+
+    }
 }

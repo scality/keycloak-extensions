@@ -329,6 +329,34 @@ public class GroupWithLinkTest {
 
     }
 
+    private GroupWithLinkRepresentation findGroupWithLink(KeycloakContainer keycloak, String id)
+            throws IOException {
+        URL url = new URL(
+                keycloak.getAuthServerUrl() + "/admin/realms/master/groups-with-link/" + id);
+        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+        conn.setRequestMethod("GET");
+        conn.setRequestProperty("Authorization", "Bearer " + tokenProvider.getToken(keycloak));
+
+        int responseCode = conn.getResponseCode();
+
+        if (responseCode != 200) {
+            System.out.println("responseCode = " + responseCode);
+            InputStream errorStream = conn.getErrorStream();
+            if (errorStream != null) {
+                byte[] buffer = new byte[1024];
+                int bytesRead;
+                while ((bytesRead = errorStream.read(buffer)) != -1) {
+                    System.out.write(buffer, 0, bytesRead);
+                }
+            }
+        }
+
+        String responsePayload = IOUtils.toString(conn.getInputStream(), "UTF-8");
+        // parse responsePayload JSON to GroupWithLinkRepresentation
+        ObjectMapper objectMapper = new ObjectMapper();
+        return objectMapper.readValue(responsePayload, GroupWithLinkRepresentation.class);
+    }
+
     @Test
     public void groups_with_links_should_be_returned_when_listing_groups()
             throws IOException, UnsupportedOperationException, InterruptedException {
@@ -401,4 +429,87 @@ public class GroupWithLinkTest {
 
     }
 
+    @Test
+    public void group_with_link_should_be_returned_when_findGroup()
+            throws IOException, UnsupportedOperationException, InterruptedException {
+        Network network = Network.newNetwork();
+        // S
+        try (GenericContainer openldap = new GenericContainer<>("osixia/openldap:latest")
+                .withCreateContainerCmdModifier(it -> it.withHostName("ldap.local"))
+                .withNetwork(network)
+                .withEnv("LDAP_DOMAIN", "ldap.local")
+                .withEnv("LDAP_ADMIN_PASSWORD", "password")
+                .withEnv("LDAP_TLS_VERIFY_CLIENT", "try")
+                .withCopyFileToContainer(MountableFile.forClasspathResource("/sample.ldif"), "/sample.ldif")
+                .withExposedPorts(389, 636)) {
+            openldap.start();
+
+            // Create some LDAP groups
+            openldap.execInContainer("ldapmodify", "-x", "-D",
+                    "cn=admin,dc=ldap,dc=local", "-w", "password", "-H",
+                    "ldap://ldap.local", "-f", "/sample.ldif");
+
+            try (KeycloakContainer keycloak = FullImageName.createContainer()
+                    .withNetwork(network)
+                    .withStartupTimeout(Duration.ofMinutes(5))
+                    .withLogConsumer(new Slf4jLogConsumer(logger))
+                    .withProviderClassesFrom("target/classes")) {
+                keycloak.start();
+
+                ProviderAndMapper providerAndMapper = createLdapConfigurationAndLdapGroupMapper(keycloak);
+                syncLdapGroups(keycloak, providerAndMapper);
+
+                // get the id of the ldap group
+                Stream<GroupWithLinkRepresentation> groupsWithLink = getGroupsWithLink(keycloak, "", "");
+                String ldapGroupId = groupsWithLink.findFirst().get().getId();
+                // V
+                GroupWithLinkRepresentation groupWithLink = findGroupWithLink(keycloak, ldapGroupId);
+                assertEquals(providerAndMapper.providerID(), groupWithLink.getFederationLink());
+                assertEquals(ldapGroupId, groupWithLink.getId());
+                assertTrue(groupWithLink.getName().startsWith("myGroup"));
+
+            }
+        }
+    }
+
+    @Test
+    public void group_with_link_should_return_non_ldap_group_when_findGroup()
+            throws IOException, UnsupportedOperationException, InterruptedException {
+        Network network = Network.newNetwork();
+        // S
+
+        // Create some Keycloak groups
+        try (KeycloakContainer keycloak = FullImageName.createContainer()
+                .withNetwork(network)
+                .withStartupTimeout(Duration.ofMinutes(5))
+                .withLogConsumer(new Slf4jLogConsumer(logger))
+                .withProviderClassesFrom("target/classes")) {
+            keycloak.start();
+
+            // Create a local group
+            URL urlLocalGroup = new URL(
+                    keycloak.getAuthServerUrl() + "/admin/realms/master/groups");
+            HttpURLConnection connLocalGroup = (HttpURLConnection) urlLocalGroup.openConnection();
+            connLocalGroup.setRequestMethod("POST");
+            connLocalGroup.setRequestProperty("Authorization", "Bearer " + tokenProvider.getToken(keycloak));
+            connLocalGroup.setRequestProperty("Content-Type", "application/json");
+            connLocalGroup.setDoOutput(true);
+            connLocalGroup.getOutputStream().write(
+                    ("{\n" + //
+                            "  \"name\": \"local-group\"\n" + //
+                            "}").getBytes());
+            connLocalGroup.getOutputStream().close();
+            connLocalGroup.getResponseCode();
+
+            Stream<GroupWithLinkRepresentation> groupsWithLink = getGroupsWithLink(keycloak, "", "");
+            String localGroupId = groupsWithLink.findFirst().get().getId();
+            // V
+            GroupWithLinkRepresentation groupWithLink = findGroupWithLink(keycloak, localGroupId);
+            assertEquals(null, groupWithLink.getFederationLink());
+            assertEquals(localGroupId, groupWithLink.getId());
+            assertEquals("local-group", groupWithLink.getName());
+
+        }
+
+    }
 }
