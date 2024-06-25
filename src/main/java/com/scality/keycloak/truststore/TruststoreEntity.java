@@ -1,5 +1,6 @@
 package com.scality.keycloak.truststore;
 
+import jakarta.persistence.Cacheable;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
@@ -12,6 +13,7 @@ import jakarta.persistence.UniqueConstraint;
 @Table(name = "TRUSTSTORE", uniqueConstraints = {
         @UniqueConstraint(columnNames = { "ID", "ALIAS" })
 })
+@Cacheable(false)
 @NamedQueries({
         @NamedQuery(name = "findAll", query = "select t from TruststoreEntity t"),
         @NamedQuery(name = "findByAlias", query = "select t from TruststoreEntity t where t.alias = :alias"),

@@ -11,12 +11,15 @@ import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
 import java.util.Base64;
+import java.util.List;
 
 import org.bouncycastle.asn1.x500.RDN;
 import org.bouncycastle.asn1.x500.X500Name;
 import org.bouncycastle.asn1.x500.style.BCStyle;
 import org.bouncycastle.asn1.x500.style.IETFUtils;
 import org.bouncycastle.cert.jcajce.JcaX509CertificateHolder;
+import org.hibernate.CacheMode;
+import org.hibernate.jpa.AvailableHints;
 import org.jboss.logging.Logger;
 import org.keycloak.connections.jpa.JpaConnectionProvider;
 import org.keycloak.models.KeycloakSession;
@@ -141,6 +144,8 @@ public class JpaCertificateTruststoreProvider implements CertificateTruststorePr
         entity.setCertificate(certificate);
         entity.setRootCA(isSelfSigned(x509Certificate));
         getEntityManager().persist(entity);
+        getEntityManager().flush();
+        getEntityManager().clear();
 
         return toCertificateRepresentation(entity);
     }
@@ -159,6 +164,8 @@ public class JpaCertificateTruststoreProvider implements CertificateTruststorePr
         entity.setCertificate(certificate);
         entity.setRootCA(isSelfSigned(x509Certificate));
         getEntityManager().merge(entity);
+        getEntityManager().flush();
+        getEntityManager().clear();
 
         return toCertificateRepresentation(entity);
     }
@@ -170,14 +177,20 @@ public class JpaCertificateTruststoreProvider implements CertificateTruststorePr
                 .setParameter("alias", alias)
                 .getSingleResult();
         getEntityManager().remove(entity);
+        getEntityManager().flush();
+        getEntityManager().clear();
     }
 
     @Override
     public CertificateRepresentation[] getCertificates() {
-        return getEntityManager()
-                .createNamedQuery("findAll", TruststoreEntity.class)
-                .getResultList()
-                .stream()
+        getEntityManager().clear();
+        List<TruststoreEntity> list = (List<TruststoreEntity>) getEntityManager()
+                .createNativeQuery("select t.id, t.alias, t.certificate, t.is_root_ca from truststore t",
+                        TruststoreEntity.class)
+                .setHint(AvailableHints.HINT_CACHEABLE, false)
+                .setHint(AvailableHints.HINT_CACHE_MODE, CacheMode.IGNORE)
+                .getResultList();
+        return list.stream()
                 .map(this::toCertificateRepresentation)
                 .toArray(CertificateRepresentation[]::new);
     }
