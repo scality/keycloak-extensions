@@ -57,12 +57,13 @@ public class JpaCertificateTruststoreProvider implements CertificateTruststorePr
         X509Certificate x509Certificate = toX509Certificate(entity.getCertificate());
         try {
             X500Name x500name = new JcaX509CertificateHolder(x509Certificate).getSubject();
-            RDN cn = x500name.getRDNs(BCStyle.CN)[0];
+            RDN[] rdns = x500name.getRDNs(BCStyle.CN);
+            RDN cn = rdns.length > 0 ? rdns[0] : null;
 
             CertificateRepresentation certificate = new CertificateRepresentation(
                     entity.getAlias(),
                     entity.getCertificate(),
-                    IETFUtils.valueToString(cn.getFirst().getValue()));
+                    cn != null ? IETFUtils.valueToString(cn.getFirst().getValue()) : "-");
 
             return certificate;
 
