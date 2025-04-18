@@ -1,6 +1,6 @@
 package com.scality.keycloak;
 
-import static org.junit.Assert.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
@@ -9,11 +9,12 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.time.Duration;
 import java.util.HashMap;
+
 import java.util.Map;
 import java.util.stream.Stream;
 
 import org.apache.commons.io.IOUtils;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.testcontainers.containers.GenericContainer;
@@ -32,8 +33,8 @@ record ProviderAndMapper(String providerID, String mapperID) {
 
 public class GroupWithLinkTest {
 
-    private Logger logger = LoggerFactory.getLogger(GroupWithLinkTest.class);
-    private TokenProvider tokenProvider = new TokenProvider();
+    private final Logger logger = LoggerFactory.getLogger(GroupWithLinkTest.class);
+    private final TokenProvider tokenProvider = new TokenProvider();
 
     private ProviderAndMapper createLdapConfigurationAndLdapGroupMapper(KeycloakContainer keycloak) throws IOException {
         /// Retrieve Master realm id

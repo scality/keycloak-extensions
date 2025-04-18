@@ -1,7 +1,5 @@
 package com.scality.keycloak.groupFederationLink;
 
-import static org.keycloak.models.jpa.PaginationUtils.paginateQuery;
-
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -12,10 +10,11 @@ import org.eclipse.microprofile.openapi.annotations.Operation;
 import org.eclipse.microprofile.openapi.annotations.extensions.Extension;
 import org.eclipse.microprofile.openapi.annotations.tags.Tag;
 import org.jboss.logging.Logger;
-import org.jboss.resteasy.annotations.cache.NoCache;
+import org.jboss.resteasy.reactive.NoCache;
 import org.keycloak.connections.jpa.JpaConnectionProvider;
 import org.keycloak.events.admin.ResourceType;
 import org.keycloak.models.KeycloakSession;
+import static org.keycloak.models.jpa.PaginationUtils.paginateQuery;
 import org.keycloak.models.jpa.entities.GroupEntity;
 import org.keycloak.representations.idm.GroupRepresentation;
 import org.keycloak.services.resources.KeycloakOpenAPI;
@@ -30,12 +29,11 @@ import jakarta.persistence.NoResultException;
 import jakarta.persistence.TypedQuery;
 import jakarta.ws.rs.DefaultValue;
 import jakarta.ws.rs.GET;
-import jakarta.ws.rs.NotFoundException;
 import jakarta.ws.rs.Path;
+import jakarta.ws.rs.PathParam;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
-import jakarta.ws.rs.PathParam;
 
 @Extension(name = KeycloakOpenAPI.Profiles.ADMIN, value = "")
 public class GroupWithLinkAdminResource {
@@ -59,7 +57,6 @@ public class GroupWithLinkAdminResource {
     private EntityManager getEntityManager() {
         return session.getProvider(JpaConnectionProvider.class).getEntityManager();
     }
-
     @GET
     @NoCache
     @Produces(MediaType.APPLICATION_JSON)

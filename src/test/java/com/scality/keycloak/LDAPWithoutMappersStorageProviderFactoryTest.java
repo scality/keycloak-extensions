@@ -1,6 +1,6 @@
 package com.scality.keycloak;
 
-import static org.junit.Assert.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -10,7 +10,7 @@ import java.time.Duration;
 import java.util.List;
 
 import org.apache.commons.io.IOUtils;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.keycloak.representations.idm.ComponentRepresentation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -23,8 +23,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import dasniko.testcontainers.keycloak.KeycloakContainer;
 
 public class LDAPWithoutMappersStorageProviderFactoryTest {
-    private Logger logger = LoggerFactory.getLogger(LDAPWithoutMappersStorageProviderFactoryTest.class);
-    private TokenProvider tokenProvider = new TokenProvider();
+    private final Logger logger = LoggerFactory.getLogger(LDAPWithoutMappersStorageProviderFactoryTest.class);
+    private final TokenProvider tokenProvider = new TokenProvider();
 
     private List<ComponentRepresentation> getMappers(KeycloakContainer keycloak, String providerId) throws IOException {
         URL url = new URL(keycloak.getAuthServerUrl() + "/admin/realms/master/components?parent=" + providerId

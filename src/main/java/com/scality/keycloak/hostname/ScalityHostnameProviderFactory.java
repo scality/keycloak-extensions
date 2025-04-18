@@ -6,20 +6,22 @@ import java.net.URISyntaxException;
 import org.jboss.logging.Logger;
 import org.keycloak.Config;
 import org.keycloak.models.KeycloakSession;
-import org.keycloak.url.DefaultHostnameProviderFactory;
+import org.keycloak.url.HostnameV2ProviderFactory;
 import org.keycloak.urls.HostnameProvider;
 
-public class ScalityHostnameProviderFactory extends DefaultHostnameProviderFactory {
+
+public class ScalityHostnameProviderFactory extends HostnameV2ProviderFactory {
 
     private static final Logger LOGGER = Logger.getLogger(ScalityHostnameProviderFactory.class);
 
+    private String hostname;
     private URI frontendUri;
     private URI adminUri;
     private boolean forceBackendUrlToFrontendUrl;
 
     @Override
     public HostnameProvider create(KeycloakSession session) {
-        return new ScalityHostnameProvider(session, frontendUri, adminUri, forceBackendUrlToFrontendUrl);
+        return new ScalityHostnameProvider(session, hostname, frontendUri, adminUri, forceBackendUrlToFrontendUrl);
     }
 
     @Override

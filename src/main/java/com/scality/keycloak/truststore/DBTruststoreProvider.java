@@ -8,6 +8,7 @@ import java.security.KeyStoreException;
 import java.security.NoSuchAlgorithmException;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
+import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -19,8 +20,8 @@ import javax.net.ssl.TrustManagerFactory;
 import javax.security.auth.x500.X500Principal;
 
 import org.jboss.logging.Logger;
-import org.keycloak.models.KeycloakSession;
 import org.keycloak.common.enums.HostnameVerificationPolicy;
+import org.keycloak.models.KeycloakSession;
 import org.keycloak.truststore.TruststoreProvider;
 
 public class DBTruststoreProvider implements TruststoreProvider {
@@ -87,19 +88,19 @@ public class DBTruststoreProvider implements TruststoreProvider {
     }
 
     @Override
-    public Map<X500Principal, X509Certificate> getRootCertificates() {
+    public Map<X500Principal, List<X509Certificate>> getRootCertificates() {
         CertificateTruststoreProvider provider = session.getProvider(CertificateTruststoreProvider.class);
         CertificateRepresentation[] rootCerts = provider.getCertificates(true);
         return Stream.of(rootCerts).map(provider::toX509Certificate)
-                .collect(Collectors.toMap(X509Certificate::getSubjectX500Principal, cert -> cert));
+                .collect(Collectors.groupingBy(X509Certificate::getSubjectX500Principal));
     }
 
     @Override
-    public Map<X500Principal, X509Certificate> getIntermediateCertificates() {
+    public Map<X500Principal, List<X509Certificate>> getIntermediateCertificates() {
         CertificateTruststoreProvider provider = session.getProvider(CertificateTruststoreProvider.class);
         CertificateRepresentation[] rootCerts = provider.getCertificates(false);
         return Stream.of(rootCerts).map(provider::toX509Certificate)
-                .collect(Collectors.toMap(X509Certificate::getSubjectX500Principal, cert -> cert));
+                .collect(Collectors.groupingBy(X509Certificate::getSubjectX500Principal));
     }
 
 }
