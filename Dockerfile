@@ -1,4 +1,4 @@
-ARG TAG=24.0.3
+ARG TAG=26.2.0
 
 FROM quay.io/keycloak/keycloak:${TAG}
 
