@@ -41,28 +41,28 @@ jobs:
           cache-to: type=gha,mode=max
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-       #
-       # Build SBOM
-       #
-       - name: Install syft
-         run: |
-           SYFT_VERSION="1.19.0"
-           SYFT_INSTALLER="syft_${SYFT_VERSION}_linux_amd64.deb"
-           SYFT_CHECKSUM="f3667d6abfa97a1e5614882f81e0a0b090f0047e0df7025b568fa87b6d95ac58"
-           wget https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/${SYFT_INSTALLER}
-           ACTUAL_CHECKSUM=$(sha256sum ${SYFT_INSTALLER} | cut -d ' ' -f1)
-           if [ "$ACTUAL_CHECKSUM" != "$SYFT_CHECKSUM" ]; then
-             echo "ERROR: Checksum verification failed for ${SYFT_INSTALLER}"
-             echo "Expected: ${SYFT_CHECKSUM}"
-             echo "Got:      ${ACTUAL_CHECKSUM}"
-             exit 1
-           fi
-           sudo dpkg -i ${SYFT_INSTALLER}
+        #
+        # Build SBOM
+        #
+      - name: Install syft
+        run: |
+          SYFT_VERSION="1.19.0"
+          SYFT_INSTALLER="syft_${SYFT_VERSION}_linux_amd64.deb"
+          SYFT_CHECKSUM="f3667d6abfa97a1e5614882f81e0a0b090f0047e0df7025b568fa87b6d95ac58"
+          wget https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/${SYFT_INSTALLER}
+          ACTUAL_CHECKSUM=$(sha256sum ${SYFT_INSTALLER} | cut -d ' ' -f1)
+          if [ "$ACTUAL_CHECKSUM" != "$SYFT_CHECKSUM" ]; then
+            echo "ERROR: Checksum verification failed for ${SYFT_INSTALLER}"
+            echo "Expected: ${SYFT_CHECKSUM}"
+            echo "Got:      ${ACTUAL_CHECKSUM}"
+            exit 1
+          fi
+          sudo dpkg -i ${SYFT_INSTALLER}
 
-       - name: "build Software Bill of materials (SBOM)"
-         run: |
-           set -xv
-           syft scan dir:./ --source-name=keycloak-extensions --source-version ${{ github.ref_name }} --output cyclonedx-json=scality-keycloak-extensions.tgz.sbom.spdx.json
+      - name: "build Software Bill of materials (SBOM)"
+        run: |
+          set -xv
+          syft scan dir:./ --source-name=keycloak-extensions --source-version ${{ github.ref_name }} --output cyclonedx-json=scality-keycloak-extensions.tgz.sbom.spdx.json
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
