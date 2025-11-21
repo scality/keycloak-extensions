@@ -45,33 +45,33 @@ public class DBTruststoreProvider implements TruststoreProvider {
         return HostnameVerificationPolicy.WILDCARD;// Todo: make configurable
     }
 
-    private record SSLFactoryAndKeystore(SSLSocketFactory sslSocketFactory, KeyStore keystore) {
-
-    }
-
-    private SSLFactoryAndKeystore getSSLSocketFactoryAndKeyStore() {
+    private KeyStore getOrCreateKeystore() {
         try {
             String trustStore = "truststore.jks";// todo ?
             char[] password = "some password".toCharArray();// todo ?
 
-            TrustManagerFactory trustManagerFactory = TrustManagerFactory.getInstance("X509");
             KeyStore keystore = KeyStore.getInstance(KeyStore.getDefaultType());
             InputStream keystoreStream = DBTruststoreProvider.class.getResourceAsStream(trustStore);
-            keystore.load(keystoreStream, password);
+            
+            // If the resource file doesn't exist, create an empty keystore
+            if (keystoreStream == null) {
+                logger.debug("Truststore resource file not found, creating empty keystore");
+                keystore.load(null, password);
+            } else {
+                keystore.load(keystoreStream, password);
+            }
+            
+            // Add certificates from database to keystore
             CertificateTruststoreProvider provider = session.getProvider(CertificateTruststoreProvider.class);
             CertificateRepresentation[] certs = provider.getCertificates();
-            for (CertificateRepresentation cert : certs) {
-                keystore.setCertificateEntry(cert.alias(), provider.toX509Certificate(cert));
+            if (certs != null) {
+                for (CertificateRepresentation cert : certs) {
+                    keystore.setCertificateEntry(cert.alias(), provider.toX509Certificate(cert));
+                }
             }
-            trustManagerFactory.init(keystore);
-            TrustManager[] trustManagers = trustManagerFactory.getTrustManagers();
-            SSLContext sc = SSLContext.getInstance("SSL");
-            sc.init(null, trustManagers, null);
-            SSLContext.setDefault(sc);
-
-            return new SSLFactoryAndKeystore(sc.getSocketFactory(), keystore);
-        } catch (KeyStoreException | IOException | NoSuchAlgorithmException | CertificateException
-                | KeyManagementException e) {
+            
+            return keystore;
+        } catch (KeyStoreException | IOException | NoSuchAlgorithmException | CertificateException e) {
             logger.error("Error while loading truststore", e);
             throw new RuntimeException(e);
         }
@@ -79,12 +79,35 @@ public class DBTruststoreProvider implements TruststoreProvider {
 
     @Override
     public SSLSocketFactory getSSLSocketFactory() {
-        return getSSLSocketFactoryAndKeyStore().sslSocketFactory();
+        try {
+            KeyStore keystore = getOrCreateKeystore();
+            
+            TrustManagerFactory trustManagerFactory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+            
+            // If keystore is empty, use default trust managers to avoid InvalidAlgorithmParameterException
+            if (keystore.size() == 0) {
+                logger.debug("Keystore is empty, using default trust managers");
+                // Initialize with null to use system default truststore
+                trustManagerFactory.init((KeyStore) null);
+            } else {
+                trustManagerFactory.init(keystore);
+            }
+            
+            TrustManager[] trustManagers = trustManagerFactory.getTrustManagers();
+            SSLContext sc = SSLContext.getInstance("SSL");
+            sc.init(null, trustManagers, null);
+            SSLContext.setDefault(sc);
+
+            return sc.getSocketFactory();
+        } catch (KeyStoreException | NoSuchAlgorithmException | KeyManagementException e) {
+            logger.error("Error while initializing SSL context", e);
+            throw new RuntimeException(e);
+        }
     }
 
     @Override
     public KeyStore getTruststore() {
-        return getSSLSocketFactoryAndKeyStore().keystore();
+        return getOrCreateKeystore();
     }
 
     @Override
