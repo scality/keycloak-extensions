@@ -19,8 +19,10 @@ import org.bouncycastle.asn1.x500.style.BCStyle;
 import org.bouncycastle.asn1.x500.style.IETFUtils;
 import org.bouncycastle.cert.jcajce.JcaX509CertificateHolder;
 import org.hibernate.CacheMode;
+import org.hibernate.exception.GenericJDBCException;
 import org.hibernate.jpa.AvailableHints;
 import org.jboss.logging.Logger;
+import org.keycloak.common.util.Retry;
 import org.keycloak.connections.jpa.JpaConnectionProvider;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.utils.KeycloakModelUtils;
@@ -30,6 +32,7 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.NoResultException;
 import jakarta.ws.rs.NotFoundException;
 import jakarta.ws.rs.core.Response.Status;
+import java.sql.SQLException;
 
 public class JpaCertificateTruststoreProvider implements CertificateTruststoreProvider {
 
@@ -46,6 +49,46 @@ public class JpaCertificateTruststoreProvider implements CertificateTruststorePr
      */
     private EntityManager getEntityManager() {
         return session.getProvider(JpaConnectionProvider.class).getEntityManager();
+    }
+
+    /**
+     * Checks if the exception is related to a closed connection or statement.
+     * These errors can occur when the connection pool closes connections due to timeouts
+     * or when transactions are committed/rolled back prematurely.
+     */
+    private boolean isConnectionClosedError(Throwable e) {
+        if (e == null) {
+            return false;
+        }
+        
+        String message = e.getMessage();
+        if (message != null) {
+            String lowerMessage = message.toLowerCase();
+            if (lowerMessage.contains("connection is closed") ||
+                lowerMessage.contains("this statement has been closed") ||
+                lowerMessage.contains("statement has been closed") ||
+                lowerMessage.contains("connection closed")) {
+                return true;
+            }
+        }
+        
+        // Check for SQLException with specific SQL states
+        if (e instanceof SQLException) {
+            SQLException sqlEx = (SQLException) e;
+            String sqlState = sqlEx.getSQLState();
+            // SQLState 55000 is a generic PostgreSQL error that can indicate connection issues
+            if ("55000".equals(sqlState) || sqlState == null) {
+                return true;
+            }
+        }
+        
+        // Check for GenericJDBCException which wraps SQL exceptions
+        if (e instanceof GenericJDBCException) {
+            return isConnectionClosedError(e.getCause());
+        }
+        
+        // Recursively check cause
+        return isConnectionClosedError(e.getCause());
     }
 
     @Override
@@ -80,6 +123,8 @@ public class JpaCertificateTruststoreProvider implements CertificateTruststorePr
 
     @Override
     public CertificateRepresentation getCertificate(String alias) {
+        // First attempt: Check if certificate exists (throws NotFoundException immediately if not found)
+        // This prevents retrying "not found" conditions which are permanent, not transient errors
         try {
             TruststoreEntity certificate = getEntityManager()
                     .createNamedQuery("findByAlias", TruststoreEntity.class)
@@ -88,6 +133,41 @@ public class JpaCertificateTruststoreProvider implements CertificateTruststorePr
             return toCertificateRepresentation(certificate);
         } catch (NoResultException e) {
             throw new NotFoundException("Certificate not found");
+        } catch (RuntimeException e) {
+            // If it's a connection closed error, retry the operation
+            // NotFoundException and other non-connection errors are rethrown immediately
+            if (isConnectionClosedError(e)) {
+                try {
+                    return Retry.call((iteration) -> {
+                        try {
+                            TruststoreEntity certificate = getEntityManager()
+                                    .createNamedQuery("findByAlias", TruststoreEntity.class)
+                                    .setParameter("alias", alias)
+                                    .getSingleResult();
+                            return toCertificateRepresentation(certificate);
+                        } catch (NoResultException ne) {
+                            throw new NotFoundException("Certificate not found");
+                        } catch (RuntimeException re) {
+                            // Only retry on connection closed errors
+                            if (isConnectionClosedError(re) && iteration < 2) {
+                                logger.debugf("Connection closed error on getCertificate, retrying (iteration %d)", iteration);
+                                getEntityManager().clear();
+                                throw re;
+                            }
+                            throw re;
+                        }
+                    }, 3, 50); // 3 attempts with 50ms delay
+                } catch (NotFoundException nfe) {
+                    throw nfe;
+                } catch (Exception retryEx) {
+                    if (retryEx.getCause() instanceof NotFoundException) {
+                        throw (NotFoundException) retryEx.getCause();
+                    }
+                    throw new RuntimeException("Failed to get certificate: " + alias, retryEx);
+                }
+            }
+            // For other runtime exceptions, rethrow them
+            throw e;
         }
     }
 
@@ -184,27 +264,65 @@ public class JpaCertificateTruststoreProvider implements CertificateTruststorePr
 
     @Override
     public CertificateRepresentation[] getCertificates() {
-        getEntityManager().clear();
-        List<TruststoreEntity> list = (List<TruststoreEntity>) getEntityManager()
-                .createNativeQuery("select t.id, t.alias, t.certificate, t.is_root_ca from truststore t",
-                        TruststoreEntity.class)
-                .setHint(AvailableHints.HINT_CACHEABLE, false)
-                .setHint(AvailableHints.HINT_CACHE_MODE, CacheMode.IGNORE)
-                .getResultList();
-        return list.stream()
-                .map(this::toCertificateRepresentation)
-                .toArray(CertificateRepresentation[]::new);
+        try {
+            return Retry.call((iteration) -> {
+                try {
+                    // Removed getEntityManager().clear() as it's unnecessary for read operations
+                    // and can cause issues with connection state
+                    @SuppressWarnings("unchecked")
+                    List<TruststoreEntity> list = (List<TruststoreEntity>) getEntityManager()
+                            .createNativeQuery("select t.id, t.alias, t.certificate, t.is_root_ca from truststore t",
+                                    TruststoreEntity.class)
+                            .setHint(AvailableHints.HINT_CACHEABLE, false)
+                            .setHint(AvailableHints.HINT_CACHE_MODE, CacheMode.IGNORE)
+                            .getResultList();
+                    return list.stream()
+                            .map(this::toCertificateRepresentation)
+                            .toArray(CertificateRepresentation[]::new);
+                } catch (RuntimeException e) {
+                    // Only retry on connection closed errors
+                    if (isConnectionClosedError(e) && iteration < 2) {
+                        logger.debugf("Connection closed error on getCertificates, retrying (iteration %d)", iteration);
+                        // Clear the entity manager to force a new connection on retry
+                        getEntityManager().clear();
+                        throw e;
+                    }
+                    throw e;
+                }
+            }, 3, 50); // 3 attempts with 50ms delay
+        } catch (Exception e) {
+            logger.error("Failed to get certificates after retries", e);
+            throw new RuntimeException("Failed to get certificates", e);
+        }
     }
 
     @Override
     public CertificateRepresentation[] getCertificates(boolean isRootCA) {
-        return getEntityManager()
-                .createNamedQuery("findByIsRootCA", TruststoreEntity.class)
-                .setParameter("isRootCA", isRootCA)
-                .getResultList()
-                .stream()
-                .map(this::toCertificateRepresentation)
-                .toArray(CertificateRepresentation[]::new);
+        try {
+            return Retry.call((iteration) -> {
+                try {
+                    return getEntityManager()
+                            .createNamedQuery("findByIsRootCA", TruststoreEntity.class)
+                            .setParameter("isRootCA", isRootCA)
+                            .getResultList()
+                            .stream()
+                            .map(this::toCertificateRepresentation)
+                            .toArray(CertificateRepresentation[]::new);
+                } catch (RuntimeException e) {
+                    // Only retry on connection closed errors
+                    if (isConnectionClosedError(e) && iteration < 2) {
+                        logger.debugf("Connection closed error on getCertificates(isRootCA=%s), retrying (iteration %d)", isRootCA, iteration);
+                        // Clear the entity manager to force a new connection on retry
+                        getEntityManager().clear();
+                        throw e;
+                    }
+                    throw e;
+                }
+            }, 3, 50); // 3 attempts with 50ms delay
+        } catch (Exception e) {
+            logger.errorf("Failed to get certificates (isRootCA=%s) after retries", isRootCA, e);
+            throw new RuntimeException("Failed to get certificates", e);
+        }
     }
 
     @Override
