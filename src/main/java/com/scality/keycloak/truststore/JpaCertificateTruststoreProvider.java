@@ -29,6 +29,7 @@ import org.keycloak.models.utils.KeycloakModelUtils;
 import org.keycloak.services.ErrorResponse;
 
 import jakarta.persistence.EntityManager;
+import jakarta.persistence.FlushModeType;
 import jakarta.persistence.NoResultException;
 import jakarta.ws.rs.NotFoundException;
 import jakarta.ws.rs.core.Response.Status;
@@ -55,6 +56,7 @@ public class JpaCertificateTruststoreProvider implements CertificateTruststorePr
      * Checks if the exception is related to a closed connection or statement.
      * These errors can occur when the connection pool closes connections due to timeouts
      * or when transactions are committed/rolled back prematurely.
+     * Also checks for Hibernate flush errors that can occur during cascade operations.
      */
     private boolean isConnectionClosedError(Throwable e) {
         if (e == null) {
@@ -67,7 +69,16 @@ public class JpaCertificateTruststoreProvider implements CertificateTruststorePr
             if (lowerMessage.contains("connection is closed") ||
                 lowerMessage.contains("this statement has been closed") ||
                 lowerMessage.contains("statement has been closed") ||
-                lowerMessage.contains("connection closed")) {
+                lowerMessage.contains("connection closed") ||
+                lowerMessage.contains("flush during cascade")) {
+                return true;
+            }
+        }
+        
+        // Check for HibernateException related to flush during cascade
+        if (e instanceof org.hibernate.HibernateException) {
+            String hibernateMessage = e.getMessage();
+            if (hibernateMessage != null && hibernateMessage.contains("Flush during cascade")) {
                 return true;
             }
         }
@@ -125,8 +136,14 @@ public class JpaCertificateTruststoreProvider implements CertificateTruststorePr
     public CertificateRepresentation getCertificate(String alias) {
         try {
             return Retry.call((iteration) -> {
+                EntityManager em = getEntityManager();
+                FlushModeType originalFlushMode = em.getFlushMode();
                 try {
-                    TruststoreEntity certificate = getEntityManager()
+                    // Set flush mode to COMMIT to prevent automatic flushing during query execution.
+                    // This avoids "Flush during cascade is dangerous" errors when there are pending
+                    // changes from other entities in the same EntityManager session.
+                    em.setFlushMode(FlushModeType.COMMIT);
+                    TruststoreEntity certificate = em
                             .createNamedQuery("findByAlias", TruststoreEntity.class)
                             .setParameter("alias", alias)
                             .getSingleResult();
@@ -134,13 +151,16 @@ public class JpaCertificateTruststoreProvider implements CertificateTruststorePr
                 } catch (NoResultException e) {
                     throw new NotFoundException("Certificate not found");
                 } catch (RuntimeException e) {
-                    // Only retry on connection closed errors
+                    // Retry on connection closed errors or flush during cascade errors
                     if (isConnectionClosedError(e) && iteration < 2) {
-                        logger.debugf("Connection closed error on getCertificate, retrying (iteration %d)", iteration);
-                        getEntityManager().clear();
+                        logger.debugf("Connection or flush error on getCertificate, retrying (iteration %d)", iteration);
+                        em.clear();
                         throw e;
                     }
                     throw e;
+                } finally {
+                    // Restore the original flush mode
+                    em.setFlushMode(originalFlushMode);
                 }
             }, 3, 50); // 3 attempts with 50ms delay
         } catch (NotFoundException e) {
@@ -248,11 +268,15 @@ public class JpaCertificateTruststoreProvider implements CertificateTruststorePr
     public CertificateRepresentation[] getCertificates() {
         try {
             return Retry.call((iteration) -> {
+                EntityManager em = getEntityManager();
+                FlushModeType originalFlushMode = em.getFlushMode();
                 try {
-                    // Removed getEntityManager().clear() as it's unnecessary for read operations
-                    // and can cause issues with connection state
+                    // Set flush mode to COMMIT to prevent automatic flushing during query execution.
+                    // This avoids "Flush during cascade is dangerous" errors when there are pending
+                    // changes from other entities in the same EntityManager session.
+                    em.setFlushMode(FlushModeType.COMMIT);
                     @SuppressWarnings("unchecked")
-                    List<TruststoreEntity> list = (List<TruststoreEntity>) getEntityManager()
+                    List<TruststoreEntity> list = (List<TruststoreEntity>) em
                             .createNativeQuery("select t.id, t.alias, t.certificate, t.is_root_ca from truststore t",
                                     TruststoreEntity.class)
                             .setHint(AvailableHints.HINT_CACHEABLE, false)
@@ -262,14 +286,17 @@ public class JpaCertificateTruststoreProvider implements CertificateTruststorePr
                             .map(this::toCertificateRepresentation)
                             .toArray(CertificateRepresentation[]::new);
                 } catch (RuntimeException e) {
-                    // Only retry on connection closed errors
+                    // Retry on connection closed errors or flush during cascade errors
                     if (isConnectionClosedError(e) && iteration < 2) {
-                        logger.debugf("Connection closed error on getCertificates, retrying (iteration %d)", iteration);
+                        logger.debugf("Connection or flush error on getCertificates, retrying (iteration %d)", iteration);
                         // Clear the entity manager to force a new connection on retry
-                        getEntityManager().clear();
+                        em.clear();
                         throw e;
                     }
                     throw e;
+                } finally {
+                    // Restore the original flush mode
+                    em.setFlushMode(originalFlushMode);
                 }
             }, 3, 50); // 3 attempts with 50ms delay
         } catch (Exception e) {
@@ -282,8 +309,14 @@ public class JpaCertificateTruststoreProvider implements CertificateTruststorePr
     public CertificateRepresentation[] getCertificates(boolean isRootCA) {
         try {
             return Retry.call((iteration) -> {
+                EntityManager em = getEntityManager();
+                FlushModeType originalFlushMode = em.getFlushMode();
                 try {
-                    return getEntityManager()
+                    // Set flush mode to COMMIT to prevent automatic flushing during query execution.
+                    // This avoids "Flush during cascade is dangerous" errors when there are pending
+                    // changes from other entities in the same EntityManager session.
+                    em.setFlushMode(FlushModeType.COMMIT);
+                    return em
                             .createNamedQuery("findByIsRootCA", TruststoreEntity.class)
                             .setParameter("isRootCA", isRootCA)
                             .getResultList()
@@ -291,14 +324,17 @@ public class JpaCertificateTruststoreProvider implements CertificateTruststorePr
                             .map(this::toCertificateRepresentation)
                             .toArray(CertificateRepresentation[]::new);
                 } catch (RuntimeException e) {
-                    // Only retry on connection closed errors
+                    // Retry on connection closed errors or flush during cascade errors
                     if (isConnectionClosedError(e) && iteration < 2) {
-                        logger.debugf("Connection closed error on getCertificates(isRootCA=%s), retrying (iteration %d)", isRootCA, iteration);
+                        logger.debugf("Connection or flush error on getCertificates(isRootCA=%s), retrying (iteration %d)", isRootCA, iteration);
                         // Clear the entity manager to force a new connection on retry
-                        getEntityManager().clear();
+                        em.clear();
                         throw e;
                     }
                     throw e;
+                } finally {
+                    // Restore the original flush mode
+                    em.setFlushMode(originalFlushMode);
                 }
             }, 3, 50); // 3 attempts with 50ms delay
         } catch (Exception e) {
