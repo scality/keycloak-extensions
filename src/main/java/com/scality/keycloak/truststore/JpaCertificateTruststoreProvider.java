@@ -48,7 +48,6 @@ public class JpaCertificateTruststoreProvider implements CertificateTruststorePr
     private static final AtomicReference<CertificateRepresentation[]> cachedAllCertificates = new AtomicReference<>(null);
     private static final ConcurrentHashMap<Boolean, AtomicReference<CertificateRepresentation[]>> cachedFilteredCertificates = new ConcurrentHashMap<>();
     private static final AtomicLong cacheTimestamp = new AtomicLong(0);
-    private static final long CACHE_MAX_AGE_MS = 5 * 60 * 1000; // 5 minutes
 
     public JpaCertificateTruststoreProvider(KeycloakSession session) {
         this.session = session;
@@ -147,8 +146,7 @@ public class JpaCertificateTruststoreProvider implements CertificateTruststorePr
      * Checks if the cache is still valid (not too old).
      */
     private boolean isCacheValid() {
-        long age = System.currentTimeMillis() - cacheTimestamp.get();
-        return age < CACHE_MAX_AGE_MS && cachedAllCertificates.get() != null;
+        return cachedAllCertificates.get() != null;
     }
 
     @Override
