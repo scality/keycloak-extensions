@@ -10,8 +10,12 @@ import java.security.cert.CertificateEncodingException;
 import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.bouncycastle.asn1.x500.RDN;
 import org.bouncycastle.asn1.x500.X500Name;
@@ -39,6 +43,12 @@ public class JpaCertificateTruststoreProvider implements CertificateTruststorePr
 
     private final KeycloakSession session;
     protected static final Logger logger = Logger.getLogger(JpaCertificateTruststoreProvider.class);
+
+    // Cache for certificates to fallback when database is unavailable
+    private static final AtomicReference<CertificateRepresentation[]> cachedAllCertificates = new AtomicReference<>(null);
+    private static final ConcurrentHashMap<Boolean, AtomicReference<CertificateRepresentation[]>> cachedFilteredCertificates = new ConcurrentHashMap<>();
+    private static final AtomicLong cacheTimestamp = new AtomicLong(0);
+    private static final long CACHE_MAX_AGE_MS = 5 * 60 * 1000; // 5 minutes
 
     public JpaCertificateTruststoreProvider(KeycloakSession session) {
         this.session = session;
@@ -115,6 +125,45 @@ public class JpaCertificateTruststoreProvider implements CertificateTruststorePr
         
         // Recursively check cause
         return isHibernateFlushError(e.getCause());
+    }
+
+    /**
+     * Updates the cache with the provided certificates.
+     */
+    private void updateCache(CertificateRepresentation[] certificates) {
+        if (certificates != null) {
+            cachedAllCertificates.set(certificates);
+            cacheTimestamp.set(System.currentTimeMillis());
+            logger.debugf("Updated certificate cache with %d certificates", certificates.length);
+        }
+    }
+
+    /**
+     * Updates the cache for filtered certificates (by isRootCA).
+     */
+    private void updateFilteredCache(boolean isRootCA, CertificateRepresentation[] certificates) {
+        if (certificates != null) {
+            cachedFilteredCertificates.computeIfAbsent(isRootCA, k -> new AtomicReference<>()).set(certificates);
+            logger.debugf("Updated filtered certificate cache (isRootCA=%s) with %d certificates", isRootCA, certificates.length);
+        }
+    }
+
+    /**
+     * Invalidates the cache. Should be called when certificates are added, updated, or removed.
+     */
+    private void invalidateCache() {
+        cachedAllCertificates.set(null);
+        cachedFilteredCertificates.clear();
+        cacheTimestamp.set(0);
+        logger.debug("Invalidated certificate cache");
+    }
+
+    /**
+     * Checks if the cache is still valid (not too old).
+     */
+    private boolean isCacheValid() {
+        long age = System.currentTimeMillis() - cacheTimestamp.get();
+        return age < CACHE_MAX_AGE_MS && cachedAllCertificates.get() != null;
     }
 
     @Override
@@ -254,6 +303,9 @@ public class JpaCertificateTruststoreProvider implements CertificateTruststorePr
         getEntityManager().flush();
         getEntityManager().clear();
 
+        // Invalidate cache since we added a new certificate
+        invalidateCache();
+
         return toCertificateRepresentation(entity);
     }
 
@@ -274,6 +326,9 @@ public class JpaCertificateTruststoreProvider implements CertificateTruststorePr
         getEntityManager().flush();
         getEntityManager().clear();
 
+        // Invalidate cache since we updated a certificate
+        invalidateCache();
+
         return toCertificateRepresentation(entity);
     }
 
@@ -286,12 +341,15 @@ public class JpaCertificateTruststoreProvider implements CertificateTruststorePr
         getEntityManager().remove(entity);
         getEntityManager().flush();
         getEntityManager().clear();
+
+        // Invalidate cache since we removed a certificate
+        invalidateCache();
     }
 
     @Override
     public CertificateRepresentation[] getCertificates() {
         try {
-            return Retry.call((iteration) -> {
+            CertificateRepresentation[] result = Retry.call((iteration) -> {
                 try {
                     EntityManager em = getEntityManager();
                     // Set flush mode to COMMIT to prevent automatic flushing before query execution
@@ -307,9 +365,12 @@ public class JpaCertificateTruststoreProvider implements CertificateTruststorePr
                                 .setHint(AvailableHints.HINT_CACHEABLE, false)
                                 .setHint(AvailableHints.HINT_CACHE_MODE, CacheMode.IGNORE)
                                 .getResultList();
-                        return list.stream()
+                        CertificateRepresentation[] certificates = list.stream()
                                 .map(this::toCertificateRepresentation)
                                 .toArray(CertificateRepresentation[]::new);
+                        // Update cache on successful retrieval
+                        updateCache(certificates);
+                        return certificates;
                     } finally {
                         // Restore original flush mode
                         em.setFlushMode(originalFlushMode);
@@ -325,16 +386,30 @@ public class JpaCertificateTruststoreProvider implements CertificateTruststorePr
                     throw e;
                 }
             }, 3, 50); // 3 attempts with 50ms delay
+            return result;
         } catch (Exception e) {
-            logger.error("Failed to get certificates after retries", e);
-            throw new RuntimeException("Failed to get certificates", e);
+            logger.error("Failed to get certificates after retries, attempting cache fallback", e);
+            // Fallback to cache if available and valid
+            CertificateRepresentation[] cached = cachedAllCertificates.get();
+            if (cached != null && isCacheValid()) {
+                logger.warnf("Using cached certificates (count: %d) due to database failure. Cache age: %d ms", 
+                    cached.length, System.currentTimeMillis() - cacheTimestamp.get());
+                return cached;
+            } else if (cached != null) {
+                logger.warnf("Cache exists but is expired (age: %d ms). Using expired cache as last resort.", 
+                    System.currentTimeMillis() - cacheTimestamp.get());
+                return cached;
+            } else {
+                logger.error("No cached certificates available, cannot fallback");
+                throw new RuntimeException("Failed to get certificates and no cache available", e);
+            }
         }
     }
 
     @Override
     public CertificateRepresentation[] getCertificates(boolean isRootCA) {
         try {
-            return Retry.call((iteration) -> {
+            CertificateRepresentation[] result = Retry.call((iteration) -> {
                 try {
                     EntityManager em = getEntityManager();
                     // Set flush mode to COMMIT to prevent automatic flushing before query execution
@@ -343,13 +418,16 @@ public class JpaCertificateTruststoreProvider implements CertificateTruststorePr
                     FlushModeType originalFlushMode = em.getFlushMode();
                     try {
                         em.setFlushMode(FlushModeType.COMMIT);
-                        return em
+                        CertificateRepresentation[] certificates = em
                                 .createNamedQuery("findByIsRootCA", TruststoreEntity.class)
                                 .setParameter("isRootCA", isRootCA)
                                 .getResultList()
                                 .stream()
                                 .map(this::toCertificateRepresentation)
                                 .toArray(CertificateRepresentation[]::new);
+                        // Update filtered cache on successful retrieval
+                        updateFilteredCache(isRootCA, certificates);
+                        return certificates;
                     } finally {
                         // Restore original flush mode
                         em.setFlushMode(originalFlushMode);
@@ -365,9 +443,52 @@ public class JpaCertificateTruststoreProvider implements CertificateTruststorePr
                     throw e;
                 }
             }, 3, 50); // 3 attempts with 50ms delay
+            return result;
         } catch (Exception e) {
-            logger.errorf("Failed to get certificates (isRootCA=%s) after retries", isRootCA, e);
-            throw new RuntimeException("Failed to get certificates", e);
+            logger.errorf("Failed to get certificates (isRootCA=%s) after retries, attempting cache fallback", isRootCA, e);
+            // First try filtered cache
+            AtomicReference<CertificateRepresentation[]> filteredCache = cachedFilteredCertificates.get(isRootCA);
+            if (filteredCache != null && filteredCache.get() != null) {
+                logger.warnf("Using cached filtered certificates (isRootCA=%s, count: %d) due to database failure", 
+                    isRootCA, filteredCache.get().length);
+                return filteredCache.get();
+            }
+            // Fallback to full cache and filter it
+            CertificateRepresentation[] cached = cachedAllCertificates.get();
+            if (cached != null && isCacheValid()) {
+                logger.warnf("Using cached certificates and filtering (isRootCA=%s) due to database failure. Cache age: %d ms", 
+                    isRootCA, System.currentTimeMillis() - cacheTimestamp.get());
+                // Filter the cached certificates
+                return Arrays.stream(cached)
+                    .filter(cert -> {
+                        try {
+                            X509Certificate x509Cert = toX509Certificate(cert.certificate());
+                            return isSelfSigned(x509Cert) == isRootCA;
+                        } catch (Exception ex) {
+                            logger.warnf("Error filtering cached certificate %s: %s", cert.alias(), ex.getMessage());
+                            return false;
+                        }
+                    })
+                    .toArray(CertificateRepresentation[]::new);
+            } else if (cached != null) {
+                logger.warnf("Cache exists but is expired (age: %d ms). Using expired cache as last resort.", 
+                    System.currentTimeMillis() - cacheTimestamp.get());
+                // Filter the expired cached certificates
+                return Arrays.stream(cached)
+                    .filter(cert -> {
+                        try {
+                            X509Certificate x509Cert = toX509Certificate(cert.certificate());
+                            return isSelfSigned(x509Cert) == isRootCA;
+                        } catch (Exception ex) {
+                            logger.warnf("Error filtering cached certificate %s: %s", cert.alias(), ex.getMessage());
+                            return false;
+                        }
+                    })
+                    .toArray(CertificateRepresentation[]::new);
+            } else {
+                logger.errorf("No cached certificates available for isRootCA=%s, cannot fallback", isRootCA);
+                throw new RuntimeException("Failed to get certificates and no cache available", e);
+            }
         }
     }
 
