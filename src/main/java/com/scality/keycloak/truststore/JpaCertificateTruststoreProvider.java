@@ -62,6 +62,32 @@ public class JpaCertificateTruststoreProvider implements CertificateTruststorePr
     }
 
     /**
+     * Attempts to get a fresh EntityManager by clearing the session's provider cache.
+     * This is a workaround when the EntityManager has a closed connection.
+     * 
+     * @return A fresh EntityManager instance
+     */
+    private EntityManager getFreshEntityManager() {
+        try {
+            EntityManager em = getEntityManager();
+            // Clear the EntityManager to force Hibernate to get a new connection
+            em.clear();
+            // Evict all cache entries to ensure we get fresh data
+            try {
+                em.getEntityManagerFactory().getCache().evictAll();
+            } catch (Exception cacheEx) {
+                // Cache eviction is optional, log but don't fail
+                logger.debugf("Could not evict EntityManagerFactory cache: %s", cacheEx.getMessage());
+            }
+            return em;
+        } catch (Exception e) {
+            logger.debugf("Could not get fresh EntityManager, falling back to regular: %s", e.getMessage());
+            // Fallback to regular EntityManager if something goes wrong
+            return getEntityManager();
+        }
+    }
+
+    /**
      * Checks if the exception is related to a closed connection or statement.
      * These errors can occur when the connection pool closes connections due to timeouts
      * or when transactions are committed/rolled back prematurely.
@@ -213,7 +239,22 @@ public class JpaCertificateTruststoreProvider implements CertificateTruststorePr
                 try {
                     return Retry.call((iteration) -> {
                         try {
-                            TruststoreEntity certificate = getEntityManager()
+                            // On retry, use fresh EntityManager to get a new connection
+                            EntityManager em = (iteration > 0) ? getFreshEntityManager() : getEntityManager();
+                            
+                            // Add exponential backoff with jitter for retries
+                            if (iteration > 0) {
+                                long backoffDelay = Math.min(50L * (1L << (iteration - 1)), 500L); // Max 500ms
+                                long jitter = (long)(Math.random() * 50); // 0-50ms jitter
+                                try {
+                                    Thread.sleep(backoffDelay + jitter);
+                                } catch (InterruptedException ie) {
+                                    Thread.currentThread().interrupt();
+                                    throw new RuntimeException("Retry interrupted", ie);
+                                }
+                            }
+                            
+                            TruststoreEntity certificate = em
                                     .createNamedQuery("findByAlias", TruststoreEntity.class)
                                     .setParameter("alias", alias)
                                     .getSingleResult();
@@ -224,12 +265,11 @@ public class JpaCertificateTruststoreProvider implements CertificateTruststorePr
                             // Only retry on connection closed errors
                             if (isConnectionClosedError(re) && iteration < 2) {
                                 logger.debugf("Connection closed error on getCertificate, retrying (iteration %d)", iteration);
-                                getEntityManager().clear();
                                 throw re;
                             }
                             throw re;
                         }
-                    }, 3, 50); // 3 attempts with 50ms delay
+                    }, 3, 0); // 3 attempts, delay handled internally with exponential backoff
                 } catch (NotFoundException nfe) {
                     throw nfe;
                 } catch (Exception retryEx) {
@@ -349,7 +389,21 @@ public class JpaCertificateTruststoreProvider implements CertificateTruststorePr
         try {
             CertificateRepresentation[] result = Retry.call((iteration) -> {
                 try {
-                    EntityManager em = getEntityManager();
+                    // On retry, use fresh EntityManager to get a new connection
+                    EntityManager em = (iteration > 0) ? getFreshEntityManager() : getEntityManager();
+                    
+                    // Add exponential backoff with jitter for retries
+                    if (iteration > 0) {
+                        long backoffDelay = Math.min(50L * (1L << (iteration - 1)), 500L); // Max 500ms
+                        long jitter = (long)(Math.random() * 50); // 0-50ms jitter
+                        try {
+                            Thread.sleep(backoffDelay + jitter);
+                        } catch (InterruptedException ie) {
+                            Thread.currentThread().interrupt();
+                            throw new RuntimeException("Retry interrupted", ie);
+                        }
+                    }
+                    
                     // Set flush mode to COMMIT to prevent automatic flushing before query execution
                     // This prevents "Flush during cascade is dangerous" errors when there are
                     // pending changes in the session from other operations
@@ -377,13 +431,11 @@ public class JpaCertificateTruststoreProvider implements CertificateTruststorePr
                     // Only retry on connection closed errors or Hibernate flush errors
                     if ((isConnectionClosedError(e) || isHibernateFlushError(e)) && iteration < 2) {
                         logger.debugf("Connection or flush error on getCertificates, retrying (iteration %d)", iteration);
-                        // Clear the entity manager to force a new connection on retry
-                        getEntityManager().clear();
                         throw e;
                     }
                     throw e;
                 }
-            }, 3, 50); // 3 attempts with 50ms delay
+            }, 3, 0); // 3 attempts, delay handled internally with exponential backoff
             return result;
         } catch (Exception e) {
             logger.error("Failed to get certificates after retries, attempting cache fallback", e);
@@ -409,7 +461,21 @@ public class JpaCertificateTruststoreProvider implements CertificateTruststorePr
         try {
             CertificateRepresentation[] result = Retry.call((iteration) -> {
                 try {
-                    EntityManager em = getEntityManager();
+                    // On retry, use fresh EntityManager to get a new connection
+                    EntityManager em = (iteration > 0) ? getFreshEntityManager() : getEntityManager();
+                    
+                    // Add exponential backoff with jitter for retries
+                    if (iteration > 0) {
+                        long backoffDelay = Math.min(50L * (1L << (iteration - 1)), 500L); // Max 500ms
+                        long jitter = (long)(Math.random() * 50); // 0-50ms jitter
+                        try {
+                            Thread.sleep(backoffDelay + jitter);
+                        } catch (InterruptedException ie) {
+                            Thread.currentThread().interrupt();
+                            throw new RuntimeException("Retry interrupted", ie);
+                        }
+                    }
+                    
                     // Set flush mode to COMMIT to prevent automatic flushing before query execution
                     // This prevents "Flush during cascade is dangerous" errors when there are
                     // pending changes in the session from other operations
@@ -434,13 +500,11 @@ public class JpaCertificateTruststoreProvider implements CertificateTruststorePr
                     // Only retry on connection closed errors or Hibernate flush errors
                     if ((isConnectionClosedError(e) || isHibernateFlushError(e)) && iteration < 2) {
                         logger.debugf("Connection or flush error on getCertificates(isRootCA=%s), retrying (iteration %d)", isRootCA, iteration);
-                        // Clear the entity manager to force a new connection on retry
-                        getEntityManager().clear();
                         throw e;
                     }
                     throw e;
                 }
-            }, 3, 50); // 3 attempts with 50ms delay
+            }, 3, 0); // 3 attempts, delay handled internally with exponential backoff
             return result;
         } catch (Exception e) {
             logger.errorf("Failed to get certificates (isRootCA=%s) after retries, attempting cache fallback", isRootCA, e);
