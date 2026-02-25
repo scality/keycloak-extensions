@@ -10,12 +10,10 @@ import java.security.cert.CertificateEncodingException;
 import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
-import java.util.Arrays;
 import java.util.Base64;
 import java.util.List;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 
 import org.bouncycastle.asn1.x500.RDN;
 import org.bouncycastle.asn1.x500.X500Name;
@@ -23,171 +21,46 @@ import org.bouncycastle.asn1.x500.style.BCStyle;
 import org.bouncycastle.asn1.x500.style.IETFUtils;
 import org.bouncycastle.cert.jcajce.JcaX509CertificateHolder;
 import org.hibernate.CacheMode;
-import org.hibernate.exception.GenericJDBCException;
 import org.hibernate.jpa.AvailableHints;
 import org.jboss.logging.Logger;
-import org.keycloak.common.util.Retry;
 import org.keycloak.connections.jpa.JpaConnectionProvider;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.utils.KeycloakModelUtils;
 import org.keycloak.services.ErrorResponse;
 
 import jakarta.persistence.EntityManager;
-import jakarta.persistence.FlushModeType;
 import jakarta.persistence.NoResultException;
 import jakarta.ws.rs.NotFoundException;
 import jakarta.ws.rs.core.Response.Status;
-import java.sql.SQLException;
 
 public class JpaCertificateTruststoreProvider implements CertificateTruststoreProvider {
 
     private final KeycloakSession session;
     protected static final Logger logger = Logger.getLogger(JpaCertificateTruststoreProvider.class);
 
-    // Cache for certificates to fallback when database is unavailable
-    private static final AtomicReference<CertificateRepresentation[]> cachedAllCertificates = new AtomicReference<>(null);
-    private static final ConcurrentHashMap<Boolean, AtomicReference<CertificateRepresentation[]>> cachedFilteredCertificates = new ConcurrentHashMap<>();
-    private static final AtomicLong cacheTimestamp = new AtomicLong(0);
-
     public JpaCertificateTruststoreProvider(KeycloakSession session) {
         this.session = session;
     }
 
-    /***
-     * 
-     * @return EntityManager
-     */
     private EntityManager getEntityManager() {
         return session.getProvider(JpaConnectionProvider.class).getEntityManager();
     }
 
     /**
-     * Attempts to get a fresh EntityManager by clearing the session's provider cache.
-     * This is a workaround when the EntityManager has a closed connection.
-     * 
-     * @return A fresh EntityManager instance
+     * Executes a database query in a completely new Keycloak session with a fresh JDBC connection.
+     * Used on retry when the current session's connection is closed — em.clear() on the same
+     * EntityManager does NOT get a new connection, so we must open a new session entirely.
      */
-    private EntityManager getFreshEntityManager() {
-        try {
-            EntityManager em = getEntityManager();
-            // Clear the EntityManager to force Hibernate to get a new connection
-            em.clear();
-            // Evict all cache entries to ensure we get fresh data
-            try {
-                em.getEntityManagerFactory().getCache().evictAll();
-            } catch (Exception cacheEx) {
-                // Cache eviction is optional, log but don't fail
-                logger.debugf("Could not evict EntityManagerFactory cache: %s", cacheEx.getMessage());
+    private <T> T executeInNewSession(Function<EntityManager, T> query) {
+        AtomicReference<T> resultRef = new AtomicReference<>();
+        KeycloakModelUtils.runJobInTransaction(
+            session.getKeycloakSessionFactory(),
+            newSession -> {
+                EntityManager newEm = newSession.getProvider(JpaConnectionProvider.class).getEntityManager();
+                resultRef.set(query.apply(newEm));
             }
-            return em;
-        } catch (Exception e) {
-            logger.debugf("Could not get fresh EntityManager, falling back to regular: %s", e.getMessage());
-            // Fallback to regular EntityManager if something goes wrong
-            return getEntityManager();
-        }
-    }
-
-    /**
-     * Checks if the exception is related to a closed connection or statement.
-     * These errors can occur when the connection pool closes connections due to timeouts
-     * or when transactions are committed/rolled back prematurely.
-     */
-    private boolean isConnectionClosedError(Throwable e) {
-        if (e == null) {
-            return false;
-        }
-        
-        String message = e.getMessage();
-        if (message != null) {
-            String lowerMessage = message.toLowerCase();
-            if (lowerMessage.contains("connection is closed") ||
-                lowerMessage.contains("this statement has been closed") ||
-                lowerMessage.contains("statement has been closed") ||
-                lowerMessage.contains("connection closed")) {
-                return true;
-            }
-        }
-        
-        // Check for SQLException with specific SQL states
-        if (e instanceof SQLException) {
-            SQLException sqlEx = (SQLException) e;
-            String sqlState = sqlEx.getSQLState();
-            // SQLState 55000 is a generic PostgreSQL error that can indicate connection issues
-            if ("55000".equals(sqlState) || sqlState == null) {
-                return true;
-            }
-        }
-        
-        // Check for GenericJDBCException which wraps SQL exceptions
-        if (e instanceof GenericJDBCException) {
-            return isConnectionClosedError(e.getCause());
-        }
-        
-        // Recursively check cause
-        return isConnectionClosedError(e.getCause());
-    }
-
-    /**
-     * Checks if the exception is related to a Hibernate flush error.
-     * This can occur when Hibernate tries to flush pending changes during cascade operations.
-     */
-    private boolean isHibernateFlushError(Throwable e) {
-        if (e == null) {
-            return false;
-        }
-        
-        // Check for HibernateException with flush-related messages
-        if (e instanceof org.hibernate.HibernateException) {
-            String message = e.getMessage();
-            if (message != null) {
-                String lowerMessage = message.toLowerCase();
-                if (lowerMessage.contains("flush during cascade") ||
-                    lowerMessage.contains("flush is dangerous")) {
-                    return true;
-                }
-            }
-        }
-        
-        // Recursively check cause
-        return isHibernateFlushError(e.getCause());
-    }
-
-    /**
-     * Updates the cache with the provided certificates.
-     */
-    private void updateCache(CertificateRepresentation[] certificates) {
-        if (certificates != null) {
-            cachedAllCertificates.set(certificates);
-            cacheTimestamp.set(System.currentTimeMillis());
-            logger.debugf("Updated certificate cache with %d certificates", certificates.length);
-        }
-    }
-
-    /**
-     * Updates the cache for filtered certificates (by isRootCA).
-     */
-    private void updateFilteredCache(boolean isRootCA, CertificateRepresentation[] certificates) {
-        if (certificates != null) {
-            cachedFilteredCertificates.computeIfAbsent(isRootCA, k -> new AtomicReference<>()).set(certificates);
-            logger.debugf("Updated filtered certificate cache (isRootCA=%s) with %d certificates", isRootCA, certificates.length);
-        }
-    }
-
-    /**
-     * Invalidates the cache. Should be called when certificates are added, updated, or removed.
-     */
-    private void invalidateCache() {
-        cachedAllCertificates.set(null);
-        cachedFilteredCertificates.clear();
-        cacheTimestamp.set(0);
-        logger.debug("Invalidated certificate cache");
-    }
-
-    /**
-     * Checks if the cache is still valid (not too old).
-     */
-    private boolean isCacheValid() {
-        return cachedAllCertificates.get() != null;
+        );
+        return resultRef.get();
     }
 
     @Override
@@ -222,8 +95,6 @@ public class JpaCertificateTruststoreProvider implements CertificateTruststorePr
 
     @Override
     public CertificateRepresentation getCertificate(String alias) {
-        // First attempt: Check if certificate exists (throws NotFoundException immediately if not found)
-        // This prevents retrying "not found" conditions which are permanent, not transient errors
         try {
             TruststoreEntity certificate = getEntityManager()
                     .createNamedQuery("findByAlias", TruststoreEntity.class)
@@ -232,55 +103,6 @@ public class JpaCertificateTruststoreProvider implements CertificateTruststorePr
             return toCertificateRepresentation(certificate);
         } catch (NoResultException e) {
             throw new NotFoundException("Certificate not found");
-        } catch (RuntimeException e) {
-            // If it's a connection closed error, retry the operation
-            // NotFoundException and other non-connection errors are rethrown immediately
-            if (isConnectionClosedError(e)) {
-                try {
-                    return Retry.call((iteration) -> {
-                        try {
-                            // On retry, use fresh EntityManager to get a new connection
-                            EntityManager em = (iteration > 0) ? getFreshEntityManager() : getEntityManager();
-                            
-                            // Add exponential backoff with jitter for retries
-                            if (iteration > 0) {
-                                long backoffDelay = Math.min(50L * (1L << (iteration - 1)), 500L); // Max 500ms
-                                long jitter = (long)(Math.random() * 50); // 0-50ms jitter
-                                try {
-                                    Thread.sleep(backoffDelay + jitter);
-                                } catch (InterruptedException ie) {
-                                    Thread.currentThread().interrupt();
-                                    throw new RuntimeException("Retry interrupted", ie);
-                                }
-                            }
-                            
-                            TruststoreEntity certificate = em
-                                    .createNamedQuery("findByAlias", TruststoreEntity.class)
-                                    .setParameter("alias", alias)
-                                    .getSingleResult();
-                            return toCertificateRepresentation(certificate);
-                        } catch (NoResultException ne) {
-                            throw new NotFoundException("Certificate not found");
-                        } catch (RuntimeException re) {
-                            // Only retry on connection closed errors
-                            if (isConnectionClosedError(re) && iteration < 2) {
-                                logger.debugf("Connection closed error on getCertificate, retrying (iteration %d)", iteration);
-                                throw re;
-                            }
-                            throw re;
-                        }
-                    }, 3, 0); // 3 attempts, delay handled internally with exponential backoff
-                } catch (NotFoundException nfe) {
-                    throw nfe;
-                } catch (Exception retryEx) {
-                    if (retryEx.getCause() instanceof NotFoundException) {
-                        throw (NotFoundException) retryEx.getCause();
-                    }
-                    throw new RuntimeException("Failed to get certificate: " + alias, retryEx);
-                }
-            }
-            // For other runtime exceptions, rethrow them
-            throw e;
         }
     }
 
@@ -341,9 +163,6 @@ public class JpaCertificateTruststoreProvider implements CertificateTruststorePr
         getEntityManager().flush();
         getEntityManager().clear();
 
-        // Invalidate cache since we added a new certificate
-        invalidateCache();
-
         return toCertificateRepresentation(entity);
     }
 
@@ -364,9 +183,6 @@ public class JpaCertificateTruststoreProvider implements CertificateTruststorePr
         getEntityManager().flush();
         getEntityManager().clear();
 
-        // Invalidate cache since we updated a certificate
-        invalidateCache();
-
         return toCertificateRepresentation(entity);
     }
 
@@ -379,179 +195,33 @@ public class JpaCertificateTruststoreProvider implements CertificateTruststorePr
         getEntityManager().remove(entity);
         getEntityManager().flush();
         getEntityManager().clear();
-
-        // Invalidate cache since we removed a certificate
-        invalidateCache();
     }
 
     @Override
     public CertificateRepresentation[] getCertificates() {
-        try {
-            CertificateRepresentation[] result = Retry.call((iteration) -> {
-                try {
-                    // On retry, use fresh EntityManager to get a new connection
-                    EntityManager em = (iteration > 0) ? getFreshEntityManager() : getEntityManager();
-                    
-                    // Add exponential backoff with jitter for retries
-                    if (iteration > 0) {
-                        long backoffDelay = Math.min(50L * (1L << (iteration - 1)), 500L); // Max 500ms
-                        long jitter = (long)(Math.random() * 50); // 0-50ms jitter
-                        try {
-                            Thread.sleep(backoffDelay + jitter);
-                        } catch (InterruptedException ie) {
-                            Thread.currentThread().interrupt();
-                            throw new RuntimeException("Retry interrupted", ie);
-                        }
-                    }
-                    
-                    // Set flush mode to COMMIT to prevent automatic flushing before query execution
-                    // This prevents "Flush during cascade is dangerous" errors when there are
-                    // pending changes in the session from other operations
-                    FlushModeType originalFlushMode = em.getFlushMode();
-                    try {
-                        em.setFlushMode(FlushModeType.COMMIT);
-                        @SuppressWarnings("unchecked")
-                        List<TruststoreEntity> list = (List<TruststoreEntity>) em
-                                .createNativeQuery("select t.id, t.alias, t.certificate, t.is_root_ca from truststore t",
-                                        TruststoreEntity.class)
-                                .setHint(AvailableHints.HINT_CACHEABLE, false)
-                                .setHint(AvailableHints.HINT_CACHE_MODE, CacheMode.IGNORE)
-                                .getResultList();
-                        CertificateRepresentation[] certificates = list.stream()
-                                .map(this::toCertificateRepresentation)
-                                .toArray(CertificateRepresentation[]::new);
-                        // Update cache on successful retrieval
-                        updateCache(certificates);
-                        return certificates;
-                    } finally {
-                        // Restore original flush mode
-                        em.setFlushMode(originalFlushMode);
-                    }
-                } catch (RuntimeException e) {
-                    // Only retry on connection closed errors or Hibernate flush errors
-                    if ((isConnectionClosedError(e) || isHibernateFlushError(e)) && iteration < 2) {
-                        logger.debugf("Connection or flush error on getCertificates, retrying (iteration %d)", iteration);
-                        throw e;
-                    }
-                    throw e;
-                }
-            }, 3, 0); // 3 attempts, delay handled internally with exponential backoff
-            return result;
-        } catch (Exception e) {
-            logger.error("Failed to get certificates after retries, attempting cache fallback", e);
-            // Fallback to cache if available and valid
-            CertificateRepresentation[] cached = cachedAllCertificates.get();
-            if (cached != null && isCacheValid()) {
-                logger.warnf("Using cached certificates (count: %d) due to database failure. Cache age: %d ms", 
-                    cached.length, System.currentTimeMillis() - cacheTimestamp.get());
-                return cached;
-            } else if (cached != null) {
-                logger.warnf("Cache exists but is expired (age: %d ms). Using expired cache as last resort.", 
-                    System.currentTimeMillis() - cacheTimestamp.get());
-                return cached;
-            } else {
-                logger.error("No cached certificates available, cannot fallback");
-                throw new RuntimeException("Failed to get certificates and no cache available", e);
-            }
-        }
+        return executeInNewSession(newEm -> {
+            @SuppressWarnings("unchecked")
+            List<TruststoreEntity> list = (List<TruststoreEntity>) newEm
+                    .createNativeQuery("select t.id, t.alias, t.certificate, t.is_root_ca from truststore t",
+                            TruststoreEntity.class)
+                    .setHint(AvailableHints.HINT_CACHEABLE, false)
+                    .setHint(AvailableHints.HINT_CACHE_MODE, CacheMode.IGNORE)
+                    .getResultList();
+            return list.stream()
+                    .map(this::toCertificateRepresentation)
+                    .toArray(CertificateRepresentation[]::new);
+        });
     }
 
     @Override
     public CertificateRepresentation[] getCertificates(boolean isRootCA) {
-        try {
-            CertificateRepresentation[] result = Retry.call((iteration) -> {
-                try {
-                    // On retry, use fresh EntityManager to get a new connection
-                    EntityManager em = (iteration > 0) ? getFreshEntityManager() : getEntityManager();
-                    
-                    // Add exponential backoff with jitter for retries
-                    if (iteration > 0) {
-                        long backoffDelay = Math.min(50L * (1L << (iteration - 1)), 500L); // Max 500ms
-                        long jitter = (long)(Math.random() * 50); // 0-50ms jitter
-                        try {
-                            Thread.sleep(backoffDelay + jitter);
-                        } catch (InterruptedException ie) {
-                            Thread.currentThread().interrupt();
-                            throw new RuntimeException("Retry interrupted", ie);
-                        }
-                    }
-                    
-                    // Set flush mode to COMMIT to prevent automatic flushing before query execution
-                    // This prevents "Flush during cascade is dangerous" errors when there are
-                    // pending changes in the session from other operations
-                    FlushModeType originalFlushMode = em.getFlushMode();
-                    try {
-                        em.setFlushMode(FlushModeType.COMMIT);
-                        CertificateRepresentation[] certificates = em
-                                .createNamedQuery("findByIsRootCA", TruststoreEntity.class)
-                                .setParameter("isRootCA", isRootCA)
-                                .getResultList()
-                                .stream()
-                                .map(this::toCertificateRepresentation)
-                                .toArray(CertificateRepresentation[]::new);
-                        // Update filtered cache on successful retrieval
-                        updateFilteredCache(isRootCA, certificates);
-                        return certificates;
-                    } finally {
-                        // Restore original flush mode
-                        em.setFlushMode(originalFlushMode);
-                    }
-                } catch (RuntimeException e) {
-                    // Only retry on connection closed errors or Hibernate flush errors
-                    if ((isConnectionClosedError(e) || isHibernateFlushError(e)) && iteration < 2) {
-                        logger.debugf("Connection or flush error on getCertificates(isRootCA=%s), retrying (iteration %d)", isRootCA, iteration);
-                        throw e;
-                    }
-                    throw e;
-                }
-            }, 3, 0); // 3 attempts, delay handled internally with exponential backoff
-            return result;
-        } catch (Exception e) {
-            logger.errorf("Failed to get certificates (isRootCA=%s) after retries, attempting cache fallback", isRootCA, e);
-            // First try filtered cache
-            AtomicReference<CertificateRepresentation[]> filteredCache = cachedFilteredCertificates.get(isRootCA);
-            if (filteredCache != null && filteredCache.get() != null) {
-                logger.warnf("Using cached filtered certificates (isRootCA=%s, count: %d) due to database failure", 
-                    isRootCA, filteredCache.get().length);
-                return filteredCache.get();
-            }
-            // Fallback to full cache and filter it
-            CertificateRepresentation[] cached = cachedAllCertificates.get();
-            if (cached != null && isCacheValid()) {
-                logger.warnf("Using cached certificates and filtering (isRootCA=%s) due to database failure. Cache age: %d ms", 
-                    isRootCA, System.currentTimeMillis() - cacheTimestamp.get());
-                // Filter the cached certificates
-                return Arrays.stream(cached)
-                    .filter(cert -> {
-                        try {
-                            X509Certificate x509Cert = toX509Certificate(cert.certificate());
-                            return isSelfSigned(x509Cert) == isRootCA;
-                        } catch (Exception ex) {
-                            logger.warnf("Error filtering cached certificate %s: %s", cert.alias(), ex.getMessage());
-                            return false;
-                        }
-                    })
-                    .toArray(CertificateRepresentation[]::new);
-            } else if (cached != null) {
-                logger.warnf("Cache exists but is expired (age: %d ms). Using expired cache as last resort.", 
-                    System.currentTimeMillis() - cacheTimestamp.get());
-                // Filter the expired cached certificates
-                return Arrays.stream(cached)
-                    .filter(cert -> {
-                        try {
-                            X509Certificate x509Cert = toX509Certificate(cert.certificate());
-                            return isSelfSigned(x509Cert) == isRootCA;
-                        } catch (Exception ex) {
-                            logger.warnf("Error filtering cached certificate %s: %s", cert.alias(), ex.getMessage());
-                            return false;
-                        }
-                    })
-                    .toArray(CertificateRepresentation[]::new);
-            } else {
-                logger.errorf("No cached certificates available for isRootCA=%s, cannot fallback", isRootCA);
-                throw new RuntimeException("Failed to get certificates and no cache available", e);
-            }
-        }
+        return executeInNewSession(newEm -> newEm
+                .createNamedQuery("findByIsRootCA", TruststoreEntity.class)
+                .setParameter("isRootCA", isRootCA)
+                .getResultList()
+                .stream()
+                .map(this::toCertificateRepresentation)
+                .toArray(CertificateRepresentation[]::new));
     }
 
     @Override
