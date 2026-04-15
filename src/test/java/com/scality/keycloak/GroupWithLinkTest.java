@@ -10,6 +10,7 @@ import java.net.URL;
 import java.time.Duration;
 import java.util.HashMap;
 
+import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
 
@@ -358,6 +359,34 @@ public class GroupWithLinkTest {
         return objectMapper.readValue(responsePayload, GroupWithLinkRepresentation.class);
     }
 
+    private int deleteComponent(KeycloakContainer keycloak, String componentId) throws IOException {
+        URL url = new URL(keycloak.getAuthServerUrl() + "/admin/realms/master/components/" + componentId);
+        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+        conn.setRequestMethod("DELETE");
+        conn.setRequestProperty("Authorization", "Bearer " + tokenProvider.getToken(keycloak));
+        return conn.getResponseCode();
+    }
+
+    private int deleteGroup(KeycloakContainer keycloak, String groupId) throws IOException {
+        URL url = new URL(keycloak.getAuthServerUrl() + "/admin/realms/master/groups/" + groupId);
+        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+        conn.setRequestMethod("DELETE");
+        conn.setRequestProperty("Authorization", "Bearer " + tokenProvider.getToken(keycloak));
+        return conn.getResponseCode();
+    }
+
+    private List<Map<String, Object>> listRealmGroups(KeycloakContainer keycloak) throws IOException {
+        URL url = new URL(keycloak.getAuthServerUrl() + "/admin/realms/master/groups");
+        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+        conn.setRequestMethod("GET");
+        conn.setRequestProperty("Authorization", "Bearer " + tokenProvider.getToken(keycloak));
+        String responsePayload = IOUtils.toString(conn.getInputStream(), "UTF-8");
+        ObjectMapper objectMapper = new ObjectMapper();
+        TypeReference<List<Map<String, Object>>> typeRef = new TypeReference<List<Map<String, Object>>>() {
+        };
+        return objectMapper.readValue(responsePayload, typeRef);
+    }
+
     @Test
     public void groups_with_links_should_be_returned_when_listing_groups()
             throws IOException, UnsupportedOperationException, InterruptedException {
@@ -512,5 +541,144 @@ public class GroupWithLinkTest {
 
         }
 
+    }
+
+    @Test
+    public void idp_deletion_cleans_groups_and_link_rows()
+            throws IOException, UnsupportedOperationException, InterruptedException {
+        Network network = Network.newNetwork();
+        try (GenericContainer openldap = new GenericContainer<>("osixia/openldap:latest")
+                .withCreateContainerCmdModifier(it -> it.withHostName("ldap.local"))
+                .withNetwork(network)
+                .withEnv("LDAP_DOMAIN", "ldap.local")
+                .withEnv("LDAP_ADMIN_PASSWORD", "password")
+                .withEnv("LDAP_TLS_VERIFY_CLIENT", "try")
+                .withCopyFileToContainer(MountableFile.forClasspathResource("/sample.ldif"), "/sample.ldif")
+                .withExposedPorts(389, 636)) {
+            openldap.start();
+
+            openldap.execInContainer("ldapmodify", "-x", "-D",
+                    "cn=admin,dc=ldap,dc=local", "-w", "password", "-H",
+                    "ldap://ldap.local", "-f", "/sample.ldif");
+
+            try (KeycloakContainer keycloak = FullImageName.createContainer()
+                    .withNetwork(network)
+                    .withStartupTimeout(Duration.ofMinutes(5))
+                    .withLogConsumer(new Slf4jLogConsumer(logger))
+                    .withProviderClassesFrom("target/classes")) {
+                keycloak.start();
+
+                ProviderAndMapper providerAndMapper = createLdapConfigurationAndLdapGroupMapper(keycloak);
+                syncLdapGroups(keycloak, providerAndMapper);
+
+                Long countBefore = countGroupsWithLink(keycloak, providerAndMapper.providerID());
+                assertTrue(countBefore > 0, "Expected link rows to exist before IDP deletion");
+
+                int deleteStatus = deleteComponent(keycloak, providerAndMapper.providerID());
+                assertEquals(204, deleteStatus, "Expected 204 when deleting the LDAP provider");
+
+                Long countAfter = countGroupsWithLink(keycloak, providerAndMapper.providerID());
+                assertEquals(0L, countAfter, "Expected all link rows to be removed after IDP deletion");
+
+                List<Map<String, Object>> realmGroups = listRealmGroups(keycloak);
+                assertEquals(0, realmGroups.size(), "Expected realm groups to be empty after IDP deletion");
+            }
+        }
+    }
+
+    @Test
+    public void direct_group_deletion_cleans_link_row_via_fk_cascade()
+            throws IOException, UnsupportedOperationException, InterruptedException {
+        Network network = Network.newNetwork();
+        try (GenericContainer openldap = new GenericContainer<>("osixia/openldap:latest")
+                .withCreateContainerCmdModifier(it -> it.withHostName("ldap.local"))
+                .withNetwork(network)
+                .withEnv("LDAP_DOMAIN", "ldap.local")
+                .withEnv("LDAP_ADMIN_PASSWORD", "password")
+                .withEnv("LDAP_TLS_VERIFY_CLIENT", "try")
+                .withCopyFileToContainer(MountableFile.forClasspathResource("/sample.ldif"), "/sample.ldif")
+                .withExposedPorts(389, 636)) {
+            openldap.start();
+
+            openldap.execInContainer("ldapmodify", "-x", "-D",
+                    "cn=admin,dc=ldap,dc=local", "-w", "password", "-H",
+                    "ldap://ldap.local", "-f", "/sample.ldif");
+
+            try (KeycloakContainer keycloak = FullImageName.createContainer()
+                    .withNetwork(network)
+                    .withStartupTimeout(Duration.ofMinutes(5))
+                    .withLogConsumer(new Slf4jLogConsumer(logger))
+                    .withProviderClassesFrom("target/classes")) {
+                keycloak.start();
+
+                ProviderAndMapper providerAndMapper = createLdapConfigurationAndLdapGroupMapper(keycloak);
+                syncLdapGroups(keycloak, providerAndMapper);
+
+                Stream<GroupWithLinkRepresentation> groupsWithLink = getGroupsWithLink(keycloak, "", "");
+                String ldapGroupId = groupsWithLink.findFirst().get().getId();
+
+                Long countBefore = countGroupsWithLink(keycloak, providerAndMapper.providerID());
+                assertTrue(countBefore > 0, "Expected link row to exist before group deletion");
+
+                int deleteStatus = deleteGroup(keycloak, ldapGroupId);
+                assertEquals(204, deleteStatus, "Expected 204 when deleting the group");
+
+                Long countAfter = countGroupsWithLink(keycloak, providerAndMapper.providerID());
+                assertEquals(countBefore - 1, countAfter,
+                        "Expected link row count to decrease by 1 after group deletion (FK CASCADE)");
+            }
+        }
+    }
+
+    @Test
+    public void idp_deletion_does_not_affect_non_linked_groups()
+            throws IOException, UnsupportedOperationException, InterruptedException {
+        Network network = Network.newNetwork();
+        try (GenericContainer openldap = new GenericContainer<>("osixia/openldap:latest")
+                .withCreateContainerCmdModifier(it -> it.withHostName("ldap.local"))
+                .withNetwork(network)
+                .withEnv("LDAP_DOMAIN", "ldap.local")
+                .withEnv("LDAP_ADMIN_PASSWORD", "password")
+                .withEnv("LDAP_TLS_VERIFY_CLIENT", "try")
+                .withCopyFileToContainer(MountableFile.forClasspathResource("/sample.ldif"), "/sample.ldif")
+                .withExposedPorts(389, 636)) {
+            openldap.start();
+
+            openldap.execInContainer("ldapmodify", "-x", "-D",
+                    "cn=admin,dc=ldap,dc=local", "-w", "password", "-H",
+                    "ldap://ldap.local", "-f", "/sample.ldif");
+
+            try (KeycloakContainer keycloak = FullImageName.createContainer()
+                    .withNetwork(network)
+                    .withStartupTimeout(Duration.ofMinutes(5))
+                    .withLogConsumer(new Slf4jLogConsumer(logger))
+                    .withProviderClassesFrom("target/classes")) {
+                keycloak.start();
+
+                URL urlLocalGroup = new URL(keycloak.getAuthServerUrl() + "/admin/realms/master/groups");
+                HttpURLConnection connLocalGroup = (HttpURLConnection) urlLocalGroup.openConnection();
+                connLocalGroup.setRequestMethod("POST");
+                connLocalGroup.setRequestProperty("Authorization", "Bearer " + tokenProvider.getToken(keycloak));
+                connLocalGroup.setRequestProperty("Content-Type", "application/json");
+                connLocalGroup.setDoOutput(true);
+                connLocalGroup.getOutputStream().write(("{\"name\": \"local-group\"}").getBytes());
+                connLocalGroup.getOutputStream().close();
+                connLocalGroup.getResponseCode();
+
+                ProviderAndMapper providerAndMapper = createLdapConfigurationAndLdapGroupMapper(keycloak);
+                syncLdapGroups(keycloak, providerAndMapper);
+
+                List<Map<String, Object>> groupsBefore = listRealmGroups(keycloak);
+                assertTrue(groupsBefore.size() >= 2, "Expected at least a local group and an LDAP group");
+
+                int deleteStatus = deleteComponent(keycloak, providerAndMapper.providerID());
+                assertEquals(204, deleteStatus, "Expected 204 when deleting the LDAP provider");
+
+                List<Map<String, Object>> groupsAfter = listRealmGroups(keycloak);
+                assertEquals(1, groupsAfter.size(), "Expected only the local group to remain after IDP deletion");
+                assertEquals("local-group", groupsAfter.get(0).get("name"),
+                        "Expected the remaining group to be the local group");
+            }
+        }
     }
 }
