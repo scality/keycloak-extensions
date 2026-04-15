@@ -31,7 +31,7 @@ public class GroupWithLinkLDAPStorageMapperFactory extends GroupLDAPStorageMappe
         EntityManager em = session.getProvider(JpaConnectionProvider.class).getEntityManager();
         List<GroupFederationLinkEntity> links = em
                 .createNamedQuery("findByFederationLink", GroupFederationLinkEntity.class)
-                .setParameter("federationLink", model.getId())
+                .setParameter("federationLink", model.getParentId())
                 .getResultList();
         for (GroupFederationLinkEntity link : links) {
             GroupModel group = realm.getGroupById(link.getGroupId());
