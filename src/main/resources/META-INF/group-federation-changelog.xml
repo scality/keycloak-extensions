@@ -27,6 +27,10 @@
 
     <changeSet author="Jean-Baptiste WATENBERG" id="group-federation-link-1.1">
 
+        <delete tableName="GROUP_FEDERATION_LINK">
+            <where>GROUP_ID NOT IN (SELECT ID FROM KEYCLOAK_GROUP)</where>
+        </delete>
+
         <addForeignKeyConstraint
             constraintName="FK_GROUP_FEDERATION_LINK_GROUP_ID"
             baseTableName="GROUP_FEDERATION_LINK"
