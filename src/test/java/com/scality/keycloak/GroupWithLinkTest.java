@@ -631,6 +631,65 @@ public class GroupWithLinkTest {
     }
 
     @Test
+    public void existing_kc_group_with_same_name_should_be_linked_on_sync()
+            throws IOException, UnsupportedOperationException, InterruptedException {
+        Network network = Network.newNetwork();
+        try (GenericContainer openldap = new GenericContainer<>("osixia/openldap:latest")
+                .withCreateContainerCmdModifier(it -> it.withHostName("ldap.local"))
+                .withNetwork(network)
+                .withEnv("LDAP_DOMAIN", "ldap.local")
+                .withEnv("LDAP_ADMIN_PASSWORD", "password")
+                .withEnv("LDAP_TLS_VERIFY_CLIENT", "try")
+                .withCopyFileToContainer(MountableFile.forClasspathResource("/sample.ldif"), "/sample.ldif")
+                .withExposedPorts(389, 636)) {
+            openldap.start();
+
+            openldap.execInContainer("ldapmodify", "-x", "-D",
+                    "cn=admin,dc=ldap,dc=local", "-w", "password", "-H",
+                    "ldap://ldap.local", "-f", "/sample.ldif");
+
+            try (KeycloakContainer keycloak = FullImageName.createContainer()
+                    .withNetwork(network)
+                    .withStartupTimeout(Duration.ofMinutes(5))
+                    .withLogConsumer(new Slf4jLogConsumer(logger))
+                    .withProviderClassesFrom("target/classes")) {
+                keycloak.start();
+
+                // Pre-create a local realm group whose name matches an LDAP group. Sync
+                // must still produce a federation link row for it.
+                URL urlLocalGroup = new URL(keycloak.getAuthServerUrl() + "/admin/realms/master/groups");
+                HttpURLConnection connLocalGroup = (HttpURLConnection) urlLocalGroup.openConnection();
+                connLocalGroup.setRequestMethod("POST");
+                connLocalGroup.setRequestProperty("Authorization", "Bearer " + tokenProvider.getToken(keycloak));
+                connLocalGroup.setRequestProperty("Content-Type", "application/json");
+                connLocalGroup.setDoOutput(true);
+                connLocalGroup.getOutputStream().write(("{\"name\": \"myGroup\"}").getBytes());
+                connLocalGroup.getOutputStream().close();
+                assertEquals(201, connLocalGroup.getResponseCode(), "Expected 201 when creating the local group");
+
+                ProviderAndMapper providerAndMapper = createLdapConfigurationAndLdapGroupMapper(keycloak);
+                syncLdapGroups(keycloak, providerAndMapper);
+
+                Long linkedCount = countGroupsWithLink(keycloak, providerAndMapper.providerID());
+                assertEquals(1L, linkedCount,
+                        "Expected the pre-existing local group to be linked to the LDAP provider after sync");
+
+                Stream<GroupWithLinkRepresentation> linked = getGroupsWithLink(keycloak,
+                        providerAndMapper.providerID(), "");
+                GroupWithLinkRepresentation linkedGroup = linked.findFirst().get();
+                assertEquals("myGroup", linkedGroup.getName(),
+                        "Expected the linked group to be the pre-existing local group");
+                assertEquals(providerAndMapper.providerID(), linkedGroup.getFederationLink(),
+                        "Expected the pre-existing group's federationLink to point to the LDAP provider");
+
+                syncLdapGroups(keycloak, providerAndMapper);
+                assertEquals(1L, countGroupsWithLink(keycloak, providerAndMapper.providerID()),
+                        "Expected the link row count to stay at 1 after a second sync (idempotent)");
+            }
+        }
+    }
+
+    @Test
     public void idp_deletion_does_not_affect_non_linked_groups()
             throws IOException, UnsupportedOperationException, InterruptedException {
         Network network = Network.newNetwork();
