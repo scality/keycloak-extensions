@@ -7,11 +7,14 @@ import java.util.Map;
 import org.keycloak.component.ComponentModel;
 import org.keycloak.connections.jpa.JpaConnectionProvider;
 import org.keycloak.models.GroupModel;
+import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
+import org.keycloak.models.utils.KeycloakModelUtils;
 import org.keycloak.storage.ldap.LDAPStorageProvider;
 import org.keycloak.storage.ldap.idm.model.LDAPObject;
 import org.keycloak.storage.ldap.mappers.membership.group.GroupLDAPStorageMapper;
 import org.keycloak.storage.ldap.mappers.membership.group.GroupLDAPStorageMapperFactory;
+import org.keycloak.storage.ldap.mappers.membership.group.GroupMapperConfig;
 import org.keycloak.storage.user.SynchronizationResult;
 
 import jakarta.persistence.EntityManager;
@@ -25,26 +28,15 @@ public class GroupWithLinkLDAPStorageMapper extends GroupLDAPStorageMapper {
         super(mapperModel, ldapProvider, factory);
     }
 
-    private EntityManager getEntityManager() {
-        return session.getProvider(JpaConnectionProvider.class).getEntityManager();
-    }
-
     @Override
     public SynchronizationResult syncDataFromFederationProviderToKeycloak(RealmModel realm) {
         pendingLinks.clear();
         SynchronizationResult result = super.syncDataFromFederationProviderToKeycloak(realm);
-        stagePendingLinksForAllLDAPGroups(realm);
 
-        if (!pendingLinks.isEmpty()) {
-            EntityManager em = getEntityManager();
-            for (GroupFederationLinkEntity entity : pendingLinks.values()) {
-                if (em.find(GroupFederationLinkEntity.class, entity.getGroupId()) == null) {
-                    em.persist(entity);
-                }
-            }
-            em.flush();
-            pendingLinks.clear();
-        }
+        KeycloakModelUtils.runJobInTransaction(
+                ldapProvider.getSession().getKeycloakSessionFactory(),
+                innerSession -> reconcileAndPersistLinks(innerSession, realm.getId()));
+        pendingLinks.clear();
 
         return result;
     }
@@ -60,14 +52,32 @@ public class GroupWithLinkLDAPStorageMapper extends GroupLDAPStorageMapper {
     // that match by name go through a private update path we can't hook. Reconcile
     // here so every LDAP group ends up with a federation link, whether created now
     // or matched to a pre-existing local group.
-    private void stagePendingLinksForAllLDAPGroups(RealmModel realm) {
+    //
+    // The whole reconcile+persist runs in a fresh Keycloak session because the outer
+    // sync session's JDBC connection is already closed by the time super returns
+    // (Agroal warns "Closing open connection(s) prior to commit"), so any JPA work
+    // reusing that session hits "Connection is closed".
+    private void reconcileAndPersistLinks(KeycloakSession innerSession, String realmId) {
+        RealmModel innerRealm = innerSession.realms().getRealm(realmId);
+        EntityManager em = innerSession.getProvider(JpaConnectionProvider.class).getEntityManager();
+
+        String groupNameAttr = mapperModel.getConfig()
+                .getFirst(GroupMapperConfig.GROUP_NAME_LDAP_ATTRIBUTE);
         List<LDAPObject> ldapGroups = getAllLDAPGroups(false);
         for (LDAPObject ldapGroup : ldapGroups) {
-            GroupModel kcGroup = findKcGroupByLDAPGroup(realm, null, ldapGroup);
+            String groupName = ldapGroup.getAttributeAsString(groupNameAttr);
+            GroupModel kcGroup = innerSession.groups().getGroupByName(innerRealm, null, groupName);
             if (kcGroup != null) {
                 stagePendingLink(kcGroup);
             }
         }
+
+        for (GroupFederationLinkEntity entity : pendingLinks.values()) {
+            if (em.find(GroupFederationLinkEntity.class, entity.getGroupId()) == null) {
+                em.persist(entity);
+            }
+        }
+        em.flush();
     }
 
     private void stagePendingLink(GroupModel groupModel) {
