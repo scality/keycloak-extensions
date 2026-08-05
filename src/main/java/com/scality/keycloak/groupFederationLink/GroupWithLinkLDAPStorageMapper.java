@@ -48,15 +48,10 @@ public class GroupWithLinkLDAPStorageMapper extends GroupLDAPStorageMapper {
         return groupModel;
     }
 
-    // Parent's sync only calls createKcGroup for brand-new groups; existing KC groups
-    // that match by name go through a private update path we can't hook. Reconcile
-    // here so every LDAP group ends up with a federation link, whether created now
-    // or matched to a pre-existing local group.
-    //
-    // The whole reconcile+persist runs in a fresh Keycloak session because the outer
-    // sync session's JDBC connection is already closed by the time super returns
-    // (Agroal warns "Closing open connection(s) prior to commit"), so any JPA work
-    // reusing that session hits "Connection is closed".
+    // super's sync links only groups it creates; groups matched to existing KC groups
+    // by name are skipped, so reconcile a link for every LDAP group here. Must use a
+    // fresh session: super's inner transactions leave the outer session's JDBC
+    // connection closed (Agroal "Closing open connection(s) prior to commit").
     private void reconcileAndPersistLinks(KeycloakSession innerSession, String realmId) {
         RealmModel innerRealm = innerSession.realms().getRealm(realmId);
         EntityManager em = innerSession.getProvider(JpaConnectionProvider.class).getEntityManager();
