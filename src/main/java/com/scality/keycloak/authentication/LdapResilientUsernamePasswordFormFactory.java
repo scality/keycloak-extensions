@@ -12,7 +12,7 @@ import org.keycloak.provider.ProviderConfigProperty;
 
 public class LdapResilientUsernamePasswordFormFactory implements AuthenticatorFactory {
 
-    public static final String PROVIDER_ID = "ldap-resilient-username-password-form";
+    public static final String PROVIDER_ID = "ldap-resilient-username-password";
 
     public static final LdapResilientUsernamePasswordForm SINGLETON = new LdapResilientUsernamePasswordForm();
 
