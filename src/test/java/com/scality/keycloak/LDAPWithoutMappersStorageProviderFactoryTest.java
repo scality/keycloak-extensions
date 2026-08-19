@@ -51,6 +51,28 @@ public class LDAPWithoutMappersStorageProviderFactoryTest {
         return mapper.readValue(responsePayload, type);
     }
 
+    private ComponentRepresentation getComponent(KeycloakContainer keycloak, String providerId) throws IOException {
+        URL url = new URL(keycloak.getAuthServerUrl() + "/admin/realms/master/components/" + providerId);
+        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+        conn.setRequestMethod("GET");
+        conn.setRequestProperty("Authorization", "Bearer " + tokenProvider.getToken(keycloak));
+        int responseCode = conn.getResponseCode();
+        if (responseCode != 200) {
+            System.out.println("Get Component responseCode = " + responseCode);
+            InputStream errorStream = conn.getErrorStream();
+            if (errorStream != null) {
+                byte[] buffer = new byte[1024];
+                int bytesRead;
+                while ((bytesRead = errorStream.read(buffer)) != -1) {
+                    System.out.write(buffer, 0, bytesRead);
+                }
+            }
+        }
+        String responsePayload = IOUtils.toString(conn.getInputStream(), "UTF-8");
+        ObjectMapper mapper = new ObjectMapper();
+        return mapper.readValue(responsePayload, ComponentRepresentation.class);
+    }
+
     private String createLdapConfiguration(KeycloakContainer keycloak) throws IOException {
         /// Retrieve Master realm id
         URL urlMasterRealm = new URL(keycloak.getAuthServerUrl() + "/admin/realms/master");
@@ -206,6 +228,27 @@ public class LDAPWithoutMappersStorageProviderFactoryTest {
             List<ComponentRepresentation> mappers = getMappers(keycloak, providerId);
 
             assertEquals(0, mappers.size());
+        }
+
+    }
+
+    @Test
+    public void should_persist_bounded_default_timeouts()
+            throws IOException, UnsupportedOperationException, InterruptedException {
+        Network network = Network.newNetwork();
+
+        try (KeycloakContainer keycloak = FullImageName.createContainer()
+                .withNetwork(network)
+                .withStartupTimeout(Duration.ofMinutes(5))
+                .withLogConsumer(new Slf4jLogConsumer(logger))
+                .withProviderClassesFrom("target/classes")) {
+            keycloak.start();
+
+            String providerId = createLdapConfiguration(keycloak);
+            ComponentRepresentation component = getComponent(keycloak, providerId);
+
+            assertEquals("5000", component.getConfig().getFirst("connectionTimeout"));
+            assertEquals("10000", component.getConfig().getFirst("readTimeout"));
         }
 
     }
