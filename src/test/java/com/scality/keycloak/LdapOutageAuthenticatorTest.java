@@ -163,6 +163,9 @@ public class LdapOutageAuthenticatorTest {
                 new TypeReference<Map<String, Object>>() {
                 });
         realm.put("browserFlow", "browser-ldap-aware");
+        // Allow the browser login flow over plain HTTP in the test (otherwise Keycloak marks session
+        // cookies Secure and the credential POST fails with 400 "Cookie not found").
+        realm.put("sslRequired", "NONE");
         HttpURLConnection bind = (HttpURLConnection) new URL(kc.getAuthServerUrl() + "/admin/realms/master")
                 .openConnection();
         bind.setRequestMethod("PUT");
@@ -175,6 +178,14 @@ public class LdapOutageAuthenticatorTest {
     }
 
     private record LoginResult(int status, String body) {
+    }
+
+    private static String snippet(String s) {
+        if (s == null) {
+            return "<null>";
+        }
+        String flat = s.replaceAll("<[^>]*>", " ").replaceAll("\\s+", " ").trim();
+        return flat.length() > 300 ? flat.substring(0, 300) : flat;
     }
 
     /** Drive the browser auth-code login form; returns the final status + body of the credential POST. */
@@ -236,7 +247,8 @@ public class LdapOutageAuthenticatorTest {
 
                 // Baseline (LDAP up): login succeeds (302 to redirect_uri) and imports the user.
                 LoginResult ok = login(keycloak, "outageuser", "secret123");
-                assertEquals(302, ok.status(), "baseline login should redirect on success");
+                assertEquals(302, ok.status(),
+                        "baseline login should redirect on success; body=" + snippet(ok.body()));
                 Map<String, Object> before = getUser(keycloak, "outageuser");
                 assertNotNull(before, "user imported");
                 String idBefore = (String) before.get("id");
