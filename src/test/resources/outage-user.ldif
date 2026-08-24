@@ -1,0 +1,12 @@
+dn: ou=people,dc=ldap,dc=local
+changetype: add
+objectClass: organizationalUnit
+ou: people
+
+dn: uid=outageuser,ou=people,dc=ldap,dc=local
+changetype: add
+objectClass: inetOrgPerson
+cn: outageuser
+sn: Outage
+uid: outageuser
+userPassword: secret123

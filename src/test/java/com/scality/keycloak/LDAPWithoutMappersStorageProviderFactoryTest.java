@@ -209,4 +209,34 @@ public class LDAPWithoutMappersStorageProviderFactoryTest {
         }
 
     }
+
+    private ComponentRepresentation getComponent(KeycloakContainer keycloak, String id) throws IOException {
+        URL url = new URL(keycloak.getAuthServerUrl() + "/admin/realms/master/components/" + id);
+        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+        conn.setRequestMethod("GET");
+        conn.setRequestProperty("Authorization", "Bearer " + tokenProvider.getToken(keycloak));
+        String responsePayload = IOUtils.toString(conn.getInputStream(), "UTF-8");
+        return new ObjectMapper().readValue(responsePayload, ComponentRepresentation.class);
+    }
+
+    @Test
+    public void should_inject_bounded_default_timeouts_when_empty()
+            throws IOException, UnsupportedOperationException, InterruptedException {
+        Network network = Network.newNetwork();
+
+        try (KeycloakContainer keycloak = FullImageName.createContainer()
+                .withNetwork(network)
+                .withStartupTimeout(Duration.ofMinutes(5))
+                .withLogConsumer(new Slf4jLogConsumer(logger))
+                .withProviderClassesFrom("target/classes")) {
+            keycloak.start();
+
+            // createLdapConfiguration sends connectionTimeout:"" and readTimeout:"" (as the wizard does).
+            String providerId = createLdapConfiguration(keycloak);
+            ComponentRepresentation component = getComponent(keycloak, providerId);
+
+            assertEquals(List.of("5000"), component.getConfig().get("connectionTimeout"));
+            assertEquals(List.of("10000"), component.getConfig().get("readTimeout"));
+        }
+    }
 }
