@@ -131,7 +131,8 @@ public class LdapOutageAuthenticatorTest {
         del.setRequestProperty("Authorization", "Bearer " + admin(kc));
         assertEquals(204, del.getResponseCode());
         // add ours to the forms subflow
-        String formsEnc = URLEncoder.encode(formsAlias, StandardCharsets.UTF_8);
+        // Keycloak path segment needs %20, not the '+' that URLEncoder emits for spaces.
+        String formsEnc = URLEncoder.encode(formsAlias, StandardCharsets.UTF_8).replace("+", "%20");
         post(kc, "/admin/realms/master/authentication/flows/" + formsEnc + "/executions/execution",
                 "{\"provider\":\"ldap-aware-username-password\"}");
         // set REQUIRED + raise priority
