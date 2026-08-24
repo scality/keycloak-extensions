@@ -5,8 +5,6 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
-import java.net.CookieManager;
-import java.net.CookiePolicy;
 import java.net.HttpURLConnection;
 import java.net.URI;
 import java.net.URL;
@@ -188,17 +186,19 @@ public class LdapOutageAuthenticatorTest {
         return flat.length() > 300 ? flat.substring(0, 300) : flat;
     }
 
-    /** Drive the browser auth-code login form; returns the final status + body of the credential POST. */
+    /** Drive the browser auth-code login form; returns the final status + body of the credential POST.
+     *  Cookies are captured manually from the GET and replayed on the POST — HttpClient's CookieManager
+     *  mishandles Keycloak's multiple Set-Cookie headers, which yields a 400 "Cookie not found". */
     private LoginResult login(KeycloakContainer kc, String user, String pass) throws Exception {
-        HttpClient http = HttpClient.newBuilder()
-                .cookieHandler(new CookieManager(null, CookiePolicy.ACCEPT_ALL))
-                .followRedirects(HttpClient.Redirect.NEVER)
-                .build();
+        HttpClient http = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NEVER).build();
         String authUrl = kc.getAuthServerUrl() + "/realms/master/protocol/openid-connect/auth"
                 + "?client_id=test-browser&redirect_uri=" + URLEncoder.encode("http://localhost/cb", StandardCharsets.UTF_8)
                 + "&response_type=code&scope=openid&state=st&nonce=no";
         HttpResponse<String> page = http.send(HttpRequest.newBuilder(URI.create(authUrl)).GET().build(),
                 HttpResponse.BodyHandlers.ofString());
+        String cookies = page.headers().allValues("set-cookie").stream()
+                .map(c -> c.split(";", 2)[0])
+                .collect(java.util.stream.Collectors.joining("; "));
         Matcher m = FORM_ACTION.matcher(page.body());
         assertTrue(m.find(), "login form action present");
         String action = m.group(1).replace("&amp;", "&");
@@ -207,6 +207,7 @@ public class LdapOutageAuthenticatorTest {
                 + "&credentialId=";
         HttpResponse<String> resp = http.send(HttpRequest.newBuilder(URI.create(action))
                 .header("Content-Type", "application/x-www-form-urlencoded")
+                .header("Cookie", cookies)
                 .POST(HttpRequest.BodyPublishers.ofString(form)).build(), HttpResponse.BodyHandlers.ofString());
         return new LoginResult(resp.statusCode(), resp.body());
     }
