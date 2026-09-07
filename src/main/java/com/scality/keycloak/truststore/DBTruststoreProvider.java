@@ -103,4 +103,21 @@ public class DBTruststoreProvider implements TruststoreProvider {
                 .collect(Collectors.groupingBy(X509Certificate::getSubjectX500Principal));
     }
 
+
+
+    @Override
+    public KeyStore getHttpsTruststore() {
+        return getTruststore();
+    }
+
+    @Override
+    public Map<X500Principal, List<X509Certificate>> getHttpsRootCertificates() {
+        return getRootCertificates();
+    }
+
+    @Override
+    public Map<X500Principal, List<X509Certificate>> getHttpsIntermediateCertificates() {
+        return getIntermediateCertificates();
+    }
+
 }

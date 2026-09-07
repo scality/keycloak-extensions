@@ -15,10 +15,10 @@ public class FullImageName {
     private static final Distribution KEYCLOAK_DIST = Distribution.valueOf(
             System.getProperty("keycloak.dist", Distribution.quarkus.name()));
 
-    // For now hardcode latest supported version to 24.0.5
+    // Default Keycloak version for container tests
     // A breaking change is introduced in 25.0.0 where
     // DefaultHostnameProviderFactory is replaced by DefaultHostnameProvider
-    private static final String LATEST_VERSION = "26.2.0";
+    private static final String LATEST_VERSION = "26.7.2";
     private static final String NIGHTLY_VERSION = "nightly";
     private static final String KEYCLOAK_VERSION = System.getProperty("keycloak.version", LATEST_VERSION);
 

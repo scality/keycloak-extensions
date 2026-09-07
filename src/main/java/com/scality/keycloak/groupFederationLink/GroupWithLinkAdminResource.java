@@ -21,8 +21,8 @@ import org.keycloak.services.resources.KeycloakOpenAPI;
 import org.keycloak.services.resources.admin.AdminEventBuilder;
 import org.keycloak.services.resources.admin.GroupResource;
 import org.keycloak.services.resources.admin.GroupsResource;
-import org.keycloak.services.resources.admin.permissions.AdminPermissionEvaluator;
-import org.keycloak.services.resources.admin.permissions.GroupPermissionEvaluator;
+import org.keycloak.services.resources.admin.fgap.AdminPermissionEvaluator;
+import org.keycloak.services.resources.admin.fgap.GroupPermissionEvaluator;
 
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.NoResultException;
@@ -74,7 +74,7 @@ public class GroupWithLinkAdminResource {
 
         if (Objects.isNull(federationLink) || federationLink.isEmpty()) {
             Stream<GroupRepresentation> groups = groupsResource.getGroups(search, null, exact, firstResult,
-                    maxResults, true, true);
+                    maxResults, true, true, true);
 
             return groups.map(group -> {
                 GroupWithLinkRepresentation groupWithLink = new GroupWithLinkRepresentation();

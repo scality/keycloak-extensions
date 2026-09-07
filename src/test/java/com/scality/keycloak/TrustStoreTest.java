@@ -16,7 +16,7 @@ import org.testcontainers.containers.Container;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.Network;
 import org.testcontainers.containers.output.Slf4jLogConsumer;
-import org.testcontainers.shaded.org.apache.commons.io.IOUtils;
+
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -72,7 +72,9 @@ public class TrustStoreTest {
 
         if (responseCode != 204) {
             System.out.println("responseCode = " + responseCode);
-            IOUtils.copy(conn.getErrorStream(), System.out);
+            if (conn.getErrorStream() != null) {
+                conn.getErrorStream().transferTo(System.out);
+            }
         }
         return responseCode == 204;
     }
