@@ -6,7 +6,7 @@
 
     <groupId>com.scality.keycloak</groupId>
     <artifactId>keycloak-extensions</artifactId>
-    <version>26.2.0-SNAPSHOT</version>
+    <version>26.7.2-SNAPSHOT</version>
 
     <name>Keycloak: Scality Extensions</name>
     <description>Scality owned extensions to support multiple hostname</description>
@@ -45,7 +45,7 @@
         <maven.compiler.release>17</maven.compiler.release>
 
         <!-- For compilation -->
-        <version.keycloak>26.2.0</version.keycloak>
+        <version.keycloak>26.7.2</version.keycloak>
 
         <!-- For compatibility tests -->
         <keycloak.version>${version.keycloak}</keycloak.version>
@@ -157,6 +157,14 @@
                 <scope>import</scope>
             </dependency>
 
+            <dependency>
+                <groupId>org.testcontainers</groupId>
+                <artifactId>testcontainers-bom</artifactId>
+                <version>1.20.4</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
         </dependencies>
     </dependencyManagement>
 
@@ -204,13 +212,13 @@
         <dependency>
             <groupId>org.mockito</groupId>
             <artifactId>mockito-core</artifactId>
-
+            <version>${version.mockito}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.mockito</groupId>
             <artifactId>mockito-junit-jupiter</artifactId>
-
+            <version>${version.mockito}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
