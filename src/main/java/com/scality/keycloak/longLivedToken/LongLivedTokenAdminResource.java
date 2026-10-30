@@ -1,5 +1,9 @@
 package com.scality.keycloak.longLivedToken;
 
+import java.time.Duration;
+
+import io.quarkus.runtime.configuration.DurationConverter;
+
 import org.eclipse.microprofile.openapi.annotations.Operation;
 import org.eclipse.microprofile.openapi.annotations.extensions.Extension;
 import org.eclipse.microprofile.openapi.annotations.tags.Tag;
@@ -47,7 +51,8 @@ public class LongLivedTokenAdminResource {
     private static final String OPEN_API_TAG = "Long-lived tokens";
     private static final String ADMIN_EVENT_RESOURCE = "LONG_LIVED_TOKEN";
     static final String LONG_LIVED_CLAIM = "long_lived";
-    static final long MAX_LIFESPAN_SECONDS = 365L * 24 * 60 * 60;
+    static final Duration MIN_LIFESPAN = Duration.ofSeconds(1);
+    static final Duration MAX_LIFESPAN = Duration.ofDays(365);
     static final int MAX_LABEL_LENGTH = 255;
 
     private final KeycloakSession session;
@@ -81,7 +86,7 @@ public class LongLivedTokenAdminResource {
         if (request == null) {
             request = new LongLivedTokenRequest(null, null);
         }
-        long lifespan = validateLifespan(request.lifespan());
+        Duration lifespan = validateLifespan(request.lifespan());
         String label = validateLabel(request.label());
         UserModel serviceAccount = requireServiceAccount(client);
 
@@ -120,14 +125,25 @@ public class LongLivedTokenAdminResource {
         return new LongLivedTokenResponse(encoded, token.getId(), token.getExp());
     }
 
-    private static long validateLifespan(Long lifespan) {
+    // Jackson coerces a JSON number into this String field and DurationConverter reads a bare
+    // number as seconds, so clients still sending the lifespan as a number keep working.
+    private static Duration validateLifespan(String lifespan) {
         if (lifespan == null) {
-            return MAX_LIFESPAN_SECONDS;
+            return MAX_LIFESPAN;
         }
-        if (lifespan < 1 || lifespan > MAX_LIFESPAN_SECONDS) {
-            throw new BadRequestException("Lifespan must be between 1 and " + MAX_LIFESPAN_SECONDS + " seconds");
+        String error = "Lifespan must be a whole number of seconds between " + MIN_LIFESPAN.toSeconds() + "s and "
+                + MAX_LIFESPAN.toDays() + "d, as seconds or a duration such as 48h or 30d";
+        Duration duration;
+        try {
+            duration = DurationConverter.parseDuration(lifespan);
+        } catch (IllegalArgumentException e) {
+            throw new BadRequestException(error);
         }
-        return lifespan;
+        if (duration == null || duration.getNano() != 0 || duration.compareTo(MIN_LIFESPAN) < 0
+                || duration.compareTo(MAX_LIFESPAN) > 0) {
+            throw new BadRequestException(error);
+        }
+        return duration;
     }
 
     private static String validateLabel(String label) {
@@ -160,7 +176,7 @@ public class LongLivedTokenAdminResource {
         return serviceAccount;
     }
 
-    private AccessToken createAccessToken(ClientModel client, UserModel serviceAccount, long lifespan) {
+    private AccessToken createAccessToken(ClientModel client, UserModel serviceAccount, Duration lifespan) {
         ClientConnection connection = session.getContext().getConnection();
         RootAuthenticationSessionModel rootAuthSession = new AuthenticationSessionManager(session)
                 .createAuthenticationSession(realm, false);
@@ -189,7 +205,7 @@ public class LongLivedTokenAdminResource {
             token.setSessionId(null);
             // The grant caps exp at the client and SSO session maximums, which cannot be raised
             // without changing them for the whole realm, so the requested lifespan replaces it.
-            token.exp(token.getIat() + lifespan);
+            token.exp(token.getIat() + lifespan.toSeconds());
             token.setOtherClaims(LONG_LIVED_CLAIM, true);
             return token;
         } finally {
