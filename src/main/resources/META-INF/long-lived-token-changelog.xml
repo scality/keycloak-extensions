@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-3.1.xsd">
+    <changeSet author="Jean-Marc MILLET" id="long-lived-token-1.0">
+
+        <createTable tableName="LONG_LIVED_TOKEN">
+            <column name="JTI" type="VARCHAR(255)">
+                <constraints nullable="false" primaryKey="true" primaryKeyName="PK_LONG_LIVED_TOKEN" />
+            </column>
+            <column name="REALM_ID" type="VARCHAR(36)">
+                <constraints nullable="false" />
+            </column>
+            <column name="CLIENT_ID" type="VARCHAR(36)">
+                <constraints nullable="false" />
+            </column>
+            <column name="LABEL" type="VARCHAR(255)" />
+            <column name="IAT" type="BIGINT">
+                <constraints nullable="false" />
+            </column>
+            <column name="EXP" type="BIGINT">
+                <constraints nullable="false" />
+            </column>
+            <column name="REVOKED" type="BOOLEAN" defaultValueBoolean="false">
+                <constraints nullable="false" />
+            </column>
+            <column name="CREATED_BY" type="VARCHAR(36)" />
+        </createTable>
+
+        <createIndex indexName="long_lived_token_realm_id" tableName="LONG_LIVED_TOKEN">
+            <column name="REALM_ID" />
+        </createIndex>
+
+        <createIndex indexName="long_lived_token_client_id" tableName="LONG_LIVED_TOKEN">
+            <column name="CLIENT_ID" />
+        </createIndex>
+
+        <addForeignKeyConstraint
+            constraintName="FK_LONG_LIVED_TOKEN_CLIENT_ID"
+            baseTableName="LONG_LIVED_TOKEN"
+            baseColumnNames="CLIENT_ID"
+            referencedTableName="CLIENT"
+            referencedColumnNames="ID"
+            onDelete="CASCADE" />
+
+    </changeSet>
+
+</databaseChangeLog>
