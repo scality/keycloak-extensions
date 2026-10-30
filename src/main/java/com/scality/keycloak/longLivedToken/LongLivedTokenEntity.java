@@ -34,10 +34,6 @@ public class LongLivedTokenEntity {
     @Column(name = "CREATED_BY")
     private String createdBy;
 
-    // Kept alongside CREATED_BY so the issuer stays readable after that user is deleted.
-    @Column(name = "CREATED_BY_USERNAME")
-    private String createdByUsername;
-
     public String getJti() {
         return jti;
     }
@@ -100,14 +96,6 @@ public class LongLivedTokenEntity {
 
     public void setCreatedBy(String createdBy) {
         this.createdBy = createdBy;
-    }
-
-    public String getCreatedByUsername() {
-        return createdByUsername;
-    }
-
-    public void setCreatedByUsername(String createdByUsername) {
-        this.createdByUsername = createdByUsername;
     }
 
     @Override

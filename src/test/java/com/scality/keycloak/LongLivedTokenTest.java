@@ -1,6 +1,7 @@
 package com.scality.keycloak;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
@@ -150,6 +151,31 @@ public class LongLivedTokenTest {
         realm.clients().get(clientUuid).remove();
 
         assertEquals("0", queryRegistry(count).trim());
+    }
+
+    @Test
+    public void failing_to_record_the_admin_event_cancels_the_issuing() throws Exception {
+        RealmRepresentation realmWithAdminEvents = realm.toRepresentation();
+        realmWithAdminEvents.setAdminEventsEnabled(true);
+        realm.update(realmWithAdminEvents);
+        queryRegistry("CREATE FUNCTION fail_admin_event() RETURNS trigger LANGUAGE plpgsql AS "
+                + "$$ BEGIN RAISE EXCEPTION 'admin event store unavailable'; END $$; "
+                + "CREATE TRIGGER fail_admin_event BEFORE INSERT ON ADMIN_EVENT_ENTITY "
+                + "FOR EACH ROW EXECUTE FUNCTION fail_admin_event();");
+        try {
+            long issuedLogLines = issuedLogLines();
+            HttpResponse<String> response = issue(serviceAccountClientUuid, "{\"label\": \"unaudited\"}", adminToken());
+
+            assertEquals(500, response.statusCode(), response.body());
+            assertFalse(response.body().contains("\"token\""), response.body());
+            assertEquals("0",
+                    queryRegistry("SELECT COUNT(*) FROM LONG_LIVED_TOKEN WHERE LABEL = 'unaudited'").trim());
+            assertEquals(issuedLogLines, issuedLogLines());
+        } finally {
+            queryRegistry("DROP TRIGGER fail_admin_event ON ADMIN_EVENT_ENTITY; DROP FUNCTION fail_admin_event();");
+            realmWithAdminEvents.setAdminEventsEnabled(false);
+            realm.update(realmWithAdminEvents);
+        }
     }
 
     @Test
@@ -351,6 +377,11 @@ public class LongLivedTokenTest {
             }
         }
         throw new AssertionError("No realm key matches the token key id " + kid);
+    }
+
+    private static long issuedLogLines() {
+        return keycloak.getLogs().lines().filter(line -> line.contains("Long-lived token ")
+                && line.contains(" issued for client ")).count();
     }
 
     private static String queryRegistry(String sql) throws IOException, InterruptedException {

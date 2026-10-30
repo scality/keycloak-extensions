@@ -14,6 +14,7 @@ import org.keycloak.common.ClientConnection;
 import org.keycloak.common.constants.ServiceAccountConstants;
 import org.keycloak.connections.jpa.JpaConnectionProvider;
 import org.keycloak.events.admin.OperationType;
+import org.keycloak.models.AbstractKeycloakTransaction;
 import org.keycloak.models.ClientModel;
 import org.keycloak.models.ClientSessionContext;
 import org.keycloak.models.Constants;
@@ -112,15 +113,26 @@ public class LongLivedTokenAdminResource {
         entity.setIat(token.getIat());
         entity.setExp(token.getExp());
         entity.setCreatedBy(issuer.getId());
-        entity.setCreatedByUsername(issuer.getUsername());
         session.getProvider(JpaConnectionProvider.class).getEntityManager().persist(entity);
 
         adminEvent.operation(OperationType.CREATE)
                 .resourcePath(session.getContext().getUri(), token.getId())
                 .representation(new LongLivedTokenResponse(null, token.getId(), token.getExp()))
                 .success();
-        logger.infof("Long-lived token %s issued for client %s in realm %s by %s, expires at %d",
-                token.getId(), client.getClientId(), realm.getName(), issuer.getUsername(), token.getExp());
+        // Logged only on commit: a failed admin event write rolls back the token, so an inline log
+        // would report a token that was never created.
+        String message = String.format("Long-lived token %s issued for client %s in realm %s by user %s, expires at %d",
+                token.getId(), client.getClientId(), realm.getName(), issuer.getId(), token.getExp());
+        session.getTransactionManager().enlistAfterCompletion(new AbstractKeycloakTransaction() {
+            @Override
+            protected void commitImpl() {
+                logger.info(message);
+            }
+
+            @Override
+            protected void rollbackImpl() {
+            }
+        });
 
         return new LongLivedTokenResponse(encoded, token.getId(), token.getExp());
     }

@@ -25,7 +25,6 @@
                 <constraints nullable="false" />
             </column>
             <column name="CREATED_BY" type="VARCHAR(36)" />
-            <column name="CREATED_BY_USERNAME" type="VARCHAR(255)" />
         </createTable>
 
         <createIndex indexName="long_lived_token_realm_id" tableName="LONG_LIVED_TOKEN">
