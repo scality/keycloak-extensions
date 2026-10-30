@@ -48,6 +48,7 @@ public class LongLivedTokenTest {
     private static final String READER_ROLE = "metrics-reader";
     private static final long TEN_HOURS = 10 * 60 * 60;
     private static final long ONE_YEAR = 365L * 24 * 60 * 60;
+    private static final long TWO_DAYS = 2L * 24 * 60 * 60;
 
     private static final ObjectMapper objectMapper = new ObjectMapper();
     private static final HttpClient http = HttpClient.newHttpClient();
@@ -161,6 +162,18 @@ public class LongLivedTokenTest {
     }
 
     @Test
+    public void lifespan_accepts_a_duration_with_a_unit() throws Exception {
+        for (String lifespan : new String[] { "2d", "48h", "PT48H" }) {
+            HttpResponse<String> response = issue(serviceAccountClientUuid,
+                    "{\"lifespan\": \"" + lifespan + "\"}", adminToken());
+
+            assertEquals(200, response.statusCode(), lifespan + ": " + response.body());
+            AccessToken token = verify(objectMapper.readTree(response.body()).get("token").asText());
+            assertEquals(TWO_DAYS, token.getExp() - token.getIat(), lifespan);
+        }
+    }
+
+    @Test
     public void token_carries_the_same_roles_as_a_client_credentials_token() throws Exception {
         HttpResponse<String> response = issue(serviceAccountClientUuid, "{\"lifespan\": 3600}", adminToken());
         assertEquals(200, response.statusCode(), response.body());
@@ -209,10 +222,15 @@ public class LongLivedTokenTest {
     }
 
     @Test
-    public void lifespan_outside_bounds_is_rejected() throws Exception {
+    public void lifespan_outside_bounds_or_malformed_is_rejected() throws Exception {
         assertEquals(400, issue(serviceAccountClientUuid, "{\"lifespan\": " + (ONE_YEAR + 1) + "}", adminToken())
                 .statusCode());
         assertEquals(400, issue(serviceAccountClientUuid, "{\"lifespan\": 0}", adminToken()).statusCode());
+        assertEquals(400, issue(serviceAccountClientUuid, "{\"lifespan\": \"366d\"}", adminToken()).statusCode());
+        assertEquals(400, issue(serviceAccountClientUuid, "{\"lifespan\": \"500ms\"}", adminToken()).statusCode());
+        assertEquals(400, issue(serviceAccountClientUuid, "{\"lifespan\": \"1500ms\"}", adminToken()).statusCode());
+        assertEquals(400, issue(serviceAccountClientUuid, "{\"lifespan\": \"two days\"}", adminToken()).statusCode());
+        assertEquals(400, issue(serviceAccountClientUuid, "{\"lifespan\": \"\"}", adminToken()).statusCode());
     }
 
     @Test
