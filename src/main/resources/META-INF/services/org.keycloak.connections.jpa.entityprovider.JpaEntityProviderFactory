@@ -1,2 +1,3 @@
 com.scality.keycloak.truststore.TruststoreJpaEntityProviderFactory
 com.scality.keycloak.groupFederationLink.GroupFederationLinkJpaEntityProviderFactory
+com.scality.keycloak.longLivedToken.LongLivedTokenJpaEntityProviderFactory
