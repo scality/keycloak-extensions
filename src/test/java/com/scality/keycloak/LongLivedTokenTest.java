@@ -13,6 +13,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.security.PublicKey;
 import java.time.Duration;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 
@@ -219,27 +220,93 @@ public class LongLivedTokenTest {
 
     @Test
     public void caller_without_manage_clients_is_forbidden() throws Exception {
-        UserRepresentation user = new UserRepresentation();
-        user.setUsername("viewer");
-        user.setEnabled(true);
-        user.setFirstName("View");
-        user.setLastName("Only");
-        user.setEmail("viewer@example.com");
-        user.setEmailVerified(true);
-        CredentialRepresentation password = new CredentialRepresentation();
-        password.setType(CredentialRepresentation.PASSWORD);
-        password.setValue("viewer");
-        password.setTemporary(false);
-        user.setCredentials(List.of(password));
-        String userId = createdId(realm.users().create(user));
-
-        String realmManagement = realm.clients().findByClientId("realm-management").get(0).getId();
-        realm.users().get(userId).roles().clientLevel(realmManagement)
-                .add(List.of(realm.clients().get(realmManagement).roles().get("view-clients").toRepresentation()));
-
-        HttpResponse<String> response = issue(serviceAccountClientUuid, "{}", passwordToken("viewer", "viewer"));
+        HttpResponse<String> response = issue(serviceAccountClientUuid, "{}", viewerToken());
 
         assertEquals(403, response.statusCode(), response.body());
+    }
+
+    @Test
+    public void revoked_token_is_refused_by_the_check() throws Exception {
+        HttpResponse<String> response = issue(serviceAccountClientUuid, "{\"lifespan\": 3600}", adminToken());
+        assertEquals(200, response.statusCode(), response.body());
+        JsonNode body = objectMapper.readTree(response.body());
+        String token = body.get("token").asText();
+        String jti = body.get("jti").asText();
+
+        assertEquals(200, check(token, "GET").statusCode());
+        assertEquals(200, check(token, "POST").statusCode());
+        assertEquals(200, checkBasic(token + ":").statusCode());
+        assertEquals(200, checkBasic("anything:" + token).statusCode());
+
+        assertEquals(204, revoke(jti, adminToken()).statusCode());
+
+        assertEquals(401, check(token, "GET").statusCode());
+        assertEquals(401, check(token, "DELETE").statusCode());
+        assertEquals(401, check(token, "OPTIONS").statusCode());
+        assertEquals(401, checkBasic(token + ":").statusCode());
+        assertEquals(401, checkBasic(token + ":x-oauth-basic").statusCode());
+        assertEquals(401, checkBasic("anything:" + token).statusCode());
+        assertEquals(204, revoke(jti, adminToken()).statusCode());
+        assertEquals("t", queryRegistry("SELECT REVOKED FROM LONG_LIVED_TOKEN WHERE JTI = '" + jti + "'").trim());
+    }
+
+    @Test
+    public void check_refuses_a_token_whose_client_was_deleted() throws Exception {
+        String clientUuid = createClient("deleted-app", false, true);
+        HttpResponse<String> response = issue(clientUuid, "{\"lifespan\": 3600}", adminToken());
+        assertEquals(200, response.statusCode(), response.body());
+        String token = objectMapper.readTree(response.body()).get("token").asText();
+
+        realm.clients().get(clientUuid).remove();
+
+        assertEquals(401, check(token, "GET").statusCode());
+    }
+
+    @Test
+    public void check_allows_requests_without_a_long_lived_token() throws Exception {
+        assertEquals(200, check(null, "GET").statusCode());
+        assertEquals(200, check(clientCredentialsToken("monitoring"), "GET").statusCode());
+    }
+
+    @Test
+    public void check_refuses_an_authorization_the_proxy_could_read_differently() throws Exception {
+        HttpResponse<String> response = issue(serviceAccountClientUuid, "{\"lifespan\": 3600}", adminToken());
+        assertEquals(200, response.statusCode(), response.body());
+        String token = objectMapper.readTree(response.body()).get("token").asText();
+
+        assertEquals(401, check("not-a-jwt", "GET").statusCode());
+        assertEquals(401, check(token + " trailing", "GET").statusCode());
+        assertEquals(401, checkAuthorization("Basic !!!").statusCode());
+        assertEquals(401, checkAuthorization("Bearer " + token, "Basic eDp4").statusCode());
+        assertEquals(401, checkAuthorization("Bearer\t" + token).statusCode());
+        assertEquals(401, checkAuthorization("Bearer").statusCode());
+    }
+
+    @Test
+    public void check_leaves_basic_credentials_without_a_token_to_the_proxy() throws Exception {
+        assertEquals(200, checkBasic("user:password").statusCode());
+        assertEquals(200, checkBasic("user:pass.word").statusCode());
+    }
+
+    @Test
+    public void check_refuses_basic_credentials_holding_a_token_with_extra_characters() throws Exception {
+        HttpResponse<String> response = issue(serviceAccountClientUuid, "{\"lifespan\": 3600}", adminToken());
+        assertEquals(200, response.statusCode(), response.body());
+        String token = objectMapper.readTree(response.body()).get("token").asText();
+
+        assertEquals(401, checkBasic("user:" + token + "\n").statusCode());
+        assertEquals(401, checkBasic("user: " + token).statusCode());
+        assertEquals(401, checkBasic("user:" + token.replaceFirst("\\.", "=.")).statusCode());
+    }
+
+    @Test
+    public void revoking_needs_manage_on_the_client_and_a_known_token() throws Exception {
+        HttpResponse<String> response = issue(serviceAccountClientUuid, "{\"lifespan\": 3600}", adminToken());
+        assertEquals(200, response.statusCode(), response.body());
+        String jti = objectMapper.readTree(response.body()).get("jti").asText();
+
+        assertEquals(403, revoke(jti, viewerToken()).statusCode());
+        assertEquals(404, revoke("unknown-jti", adminToken()).statusCode());
     }
 
     @Test
@@ -331,6 +398,70 @@ public class LongLivedTokenTest {
                 .POST(HttpRequest.BodyPublishers.ofString(body))
                 .build();
         return http.send(request, HttpResponse.BodyHandlers.ofString());
+    }
+
+    private static HttpResponse<String> revoke(String jti, String bearer) throws IOException, InterruptedException {
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(keycloak.getAuthServerUrl() + "/admin/realms/" + REALM
+                        + "/long-lived-tokens/" + jti + "/revoke"))
+                .header("Authorization", "Bearer " + bearer)
+                .POST(HttpRequest.BodyPublishers.noBody())
+                .build();
+        return http.send(request, HttpResponse.BodyHandlers.ofString());
+    }
+
+    private static HttpResponse<String> check(String bearer, String method) throws IOException, InterruptedException {
+        HttpRequest.Builder request = HttpRequest.newBuilder()
+                .uri(URI.create(realmUrl() + "/long-lived-tokens/check"))
+                .method(method, HttpRequest.BodyPublishers.noBody());
+        if (bearer != null) {
+            request.header("Authorization", "Bearer " + bearer);
+        }
+        return http.send(request.build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    private static HttpResponse<String> checkAuthorization(String... authorizations)
+            throws IOException, InterruptedException {
+        HttpRequest.Builder request = HttpRequest.newBuilder()
+                .uri(URI.create(realmUrl() + "/long-lived-tokens/check"))
+                .GET();
+        for (String authorization : authorizations) {
+            request.header("Authorization", authorization);
+        }
+        return http.send(request.build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    private static HttpResponse<String> checkBasic(String credentials) throws IOException, InterruptedException {
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(realmUrl() + "/long-lived-tokens/check"))
+                .header("Authorization", "Basic "
+                        + Base64.getEncoder().encodeToString(credentials.getBytes(StandardCharsets.UTF_8)))
+                .GET()
+                .build();
+        return http.send(request, HttpResponse.BodyHandlers.ofString());
+    }
+
+    private static String viewerToken() throws IOException, InterruptedException {
+        if (realm.users().search("viewer", true).isEmpty()) {
+            UserRepresentation user = new UserRepresentation();
+            user.setUsername("viewer");
+            user.setEnabled(true);
+            user.setFirstName("View");
+            user.setLastName("Only");
+            user.setEmail("viewer@example.com");
+            user.setEmailVerified(true);
+            CredentialRepresentation password = new CredentialRepresentation();
+            password.setType(CredentialRepresentation.PASSWORD);
+            password.setValue("viewer");
+            password.setTemporary(false);
+            user.setCredentials(List.of(password));
+            String userId = createdId(realm.users().create(user));
+
+            String realmManagement = realm.clients().findByClientId("realm-management").get(0).getId();
+            realm.users().get(userId).roles().clientLevel(realmManagement)
+                    .add(List.of(realm.clients().get(realmManagement).roles().get("view-clients").toRepresentation()));
+        }
+        return passwordToken("viewer", "viewer");
     }
 
     private static String clientCredentialsToken(String clientId) throws IOException, InterruptedException {
