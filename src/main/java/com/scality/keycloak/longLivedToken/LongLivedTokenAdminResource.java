@@ -1,6 +1,7 @@
 package com.scality.keycloak.longLivedToken;
 
 import java.time.Duration;
+import java.util.List;
 
 import io.quarkus.runtime.configuration.DurationConverter;
 
@@ -12,6 +13,7 @@ import org.jboss.resteasy.reactive.NoCache;
 import org.keycloak.OAuth2Constants;
 import org.keycloak.common.ClientConnection;
 import org.keycloak.common.constants.ServiceAccountConstants;
+import org.keycloak.common.util.Time;
 import org.keycloak.connections.jpa.JpaConnectionProvider;
 import org.keycloak.events.admin.OperationType;
 import org.keycloak.models.AbstractKeycloakTransaction;
@@ -38,13 +40,17 @@ import org.keycloak.sessions.RootAuthenticationSessionModel;
 
 import jakarta.persistence.EntityManager;
 import jakarta.ws.rs.BadRequestException;
+import jakarta.ws.rs.ClientErrorException;
 import jakarta.ws.rs.Consumes;
+import jakarta.ws.rs.DELETE;
+import jakarta.ws.rs.GET;
 import jakarta.ws.rs.NotFoundException;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.PathParam;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.core.Response;
 
 @Extension(name = KeycloakOpenAPI.Profiles.ADMIN, value = "")
 public class LongLivedTokenAdminResource {
@@ -126,6 +132,29 @@ public class LongLivedTokenAdminResource {
         return new LongLivedTokenResponse(encoded, token.getId(), token.getExp());
     }
 
+    @GET
+    @Path("clients/{client-uuid}")
+    @NoCache
+    @Produces(MediaType.APPLICATION_JSON)
+    @Tag(name = OPEN_API_TAG)
+    @Operation(summary = "List the long-lived tokens issued for a client, newest first, without the tokens themselves.")
+    public List<LongLivedTokenInfo> listTokens(@PathParam("client-uuid") String clientUuid) {
+        ClientModel client = realm.getClientById(clientUuid);
+        if (client == null) {
+            throw new NotFoundException("Client not found");
+        }
+        auth.clients().requireView(client);
+
+        return getEntityManager()
+                .createQuery("SELECT t FROM LongLivedTokenEntity t WHERE t.realmId = :realmId"
+                        + " AND t.clientId = :clientId ORDER BY t.iat DESC", LongLivedTokenEntity.class)
+                .setParameter("realmId", realm.getId())
+                .setParameter("clientId", client.getId())
+                .getResultStream()
+                .map(LongLivedTokenInfo::of)
+                .toList();
+    }
+
     @POST
     @Path("{jti}/revoke")
     @NoCache
@@ -145,6 +174,31 @@ public class LongLivedTokenAdminResource {
                 .resourcePath(session.getContext().getUri())
                 .success();
         logOnCommit(String.format("Long-lived token %s of client %s in realm %s revoked by user %s",
+                jti, client.getClientId(), realm.getName(), auth.adminAuth().getUser().getId()));
+    }
+
+    @DELETE
+    @Path("{jti}")
+    @NoCache
+    @Tag(name = OPEN_API_TAG)
+    @Operation(summary = "Delete an expired long-lived token from the registry. A token that has not expired yet must be revoked instead.")
+    public void deleteToken(@PathParam("jti") String jti) {
+        LongLivedTokenEntity entity = findToken(jti);
+        ClientModel client = realm.getClientById(entity.getClientId());
+        auth.clients().requireManage(client);
+
+        // The token check rejects tokens missing from the registry, so deleting a live token would
+        // revoke it and hide it from the list.
+        if (entity.getExp() > Time.currentTime()) {
+            throw new ClientErrorException("Only an expired long-lived token can be deleted; revoke it instead",
+                    Response.Status.CONFLICT);
+        }
+        getEntityManager().remove(entity);
+
+        adminEvent.operation(OperationType.DELETE)
+                .resourcePath(session.getContext().getUri())
+                .success();
+        logOnCommit(String.format("Expired long-lived token %s of client %s in realm %s deleted by user %s",
                 jti, client.getClientId(), realm.getName(), auth.adminAuth().getUser().getId()));
     }
 
