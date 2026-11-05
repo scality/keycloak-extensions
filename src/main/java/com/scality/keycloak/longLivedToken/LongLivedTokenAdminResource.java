@@ -148,6 +148,8 @@ public class LongLivedTokenAdminResource {
                 jti, client.getClientId(), realm.getName(), auth.adminAuth().getUser().getId()));
     }
 
+    // A registry row is deleted with its client (foreign key ON DELETE CASCADE), so the client
+    // of a token found here always exists.
     private LongLivedTokenEntity findToken(String jti) {
         LongLivedTokenEntity entity = getEntityManager().find(LongLivedTokenEntity.class, jti);
         if (entity == null || !entity.getRealmId().equals(realm.getId())) {
