@@ -36,6 +36,7 @@ import org.keycloak.services.resources.admin.fgap.AdminPermissionEvaluator;
 import org.keycloak.sessions.AuthenticationSessionModel;
 import org.keycloak.sessions.RootAuthenticationSessionModel;
 
+import jakarta.persistence.EntityManager;
 import jakarta.ws.rs.BadRequestException;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.NotFoundException;
@@ -113,16 +114,55 @@ public class LongLivedTokenAdminResource {
         entity.setIat(token.getIat());
         entity.setExp(token.getExp());
         entity.setCreatedBy(issuer.getId());
-        session.getProvider(JpaConnectionProvider.class).getEntityManager().persist(entity);
+        getEntityManager().persist(entity);
 
         adminEvent.operation(OperationType.CREATE)
                 .resourcePath(session.getContext().getUri(), token.getId())
                 .representation(new LongLivedTokenResponse(null, token.getId(), token.getExp()))
                 .success();
-        // Logged only on commit: a failed admin event write rolls back the token, so an inline log
-        // would report a token that was never created.
-        String message = String.format("Long-lived token %s issued for client %s in realm %s by user %s, expires at %d",
-                token.getId(), client.getClientId(), realm.getName(), issuer.getId(), token.getExp());
+        logOnCommit(String.format("Long-lived token %s issued for client %s in realm %s by user %s, expires at %d",
+                token.getId(), client.getClientId(), realm.getName(), issuer.getId(), token.getExp()));
+
+        return new LongLivedTokenResponse(encoded, token.getId(), token.getExp());
+    }
+
+    @POST
+    @Path("{jti}/revoke")
+    @NoCache
+    @Tag(name = OPEN_API_TAG)
+    @Operation(summary = "Revoke a long-lived token. A proxy that checks tokens against this realm refuses it from then on.")
+    public void revokeToken(@PathParam("jti") String jti) {
+        LongLivedTokenEntity entity = findToken(jti);
+        ClientModel client = realm.getClientById(entity.getClientId());
+        auth.clients().requireManage(client);
+
+        if (entity.isRevoked()) {
+            return;
+        }
+        entity.setRevoked(true);
+
+        adminEvent.operation(OperationType.ACTION)
+                .resourcePath(session.getContext().getUri())
+                .success();
+        logOnCommit(String.format("Long-lived token %s of client %s in realm %s revoked by user %s",
+                jti, client.getClientId(), realm.getName(), auth.adminAuth().getUser().getId()));
+    }
+
+    private LongLivedTokenEntity findToken(String jti) {
+        LongLivedTokenEntity entity = getEntityManager().find(LongLivedTokenEntity.class, jti);
+        if (entity == null || !entity.getRealmId().equals(realm.getId())) {
+            throw new NotFoundException("Long-lived token not found");
+        }
+        return entity;
+    }
+
+    private EntityManager getEntityManager() {
+        return session.getProvider(JpaConnectionProvider.class).getEntityManager();
+    }
+
+    // Logged only on commit: a failed admin event write rolls the change back, so an inline log
+    // would report a change that never happened.
+    private void logOnCommit(String message) {
         session.getTransactionManager().enlistAfterCompletion(new AbstractKeycloakTransaction() {
             @Override
             protected void commitImpl() {
@@ -133,8 +173,6 @@ public class LongLivedTokenAdminResource {
             protected void rollbackImpl() {
             }
         });
-
-        return new LongLivedTokenResponse(encoded, token.getId(), token.getExp());
     }
 
     // Jackson coerces a JSON number into this String field and DurationConverter reads a bare
