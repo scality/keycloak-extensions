@@ -13,6 +13,7 @@ import org.keycloak.representations.AccessToken;
 import jakarta.ws.rs.DELETE;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.HEAD;
+import jakarta.ws.rs.OPTIONS;
 import jakarta.ws.rs.PATCH;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.PUT;
@@ -70,6 +71,12 @@ public class LongLivedTokenCheckResource {
         return check();
     }
 
+    @OPTIONS
+    @Path("check")
+    public Response checkOptions() {
+        return check();
+    }
+
     private Response check() {
         List<String> authorizations = session.getContext().getRequestHeaders().getRequestHeader(HttpHeaders.AUTHORIZATION);
         if (authorizations == null || authorizations.isEmpty()) {
@@ -102,7 +109,13 @@ public class LongLivedTokenCheckResource {
             return refused();
         }
         for (String part : credentials.split(":", 2)) {
-            if (COMPACT_JWS.matcher(part).matches() && isRevokedOrUnknown(part)) {
+            // An upstream may strip whitespace or base64 padding before reading a token, so a part
+            // that is a JWT once stripped is refused unless it already was one.
+            boolean jws = COMPACT_JWS.matcher(part).matches();
+            if (!jws && COMPACT_JWS.matcher(part.replaceAll("[\\s=]", "")).matches()) {
+                return refused();
+            }
+            if (jws && isRevokedOrUnknown(part)) {
                 return refused();
             }
         }

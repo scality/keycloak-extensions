@@ -242,6 +242,7 @@ public class LongLivedTokenTest {
 
         assertEquals(401, check(token, "GET").statusCode());
         assertEquals(401, check(token, "DELETE").statusCode());
+        assertEquals(401, check(token, "OPTIONS").statusCode());
         assertEquals(401, checkBasic(token + ":").statusCode());
         assertEquals(401, checkBasic(token + ":x-oauth-basic").statusCode());
         assertEquals(401, checkBasic("anything:" + token).statusCode());
@@ -284,6 +285,18 @@ public class LongLivedTokenTest {
     @Test
     public void check_leaves_basic_credentials_without_a_token_to_the_proxy() throws Exception {
         assertEquals(200, checkBasic("user:password").statusCode());
+        assertEquals(200, checkBasic("user:pass.word").statusCode());
+    }
+
+    @Test
+    public void check_refuses_basic_credentials_holding_a_token_with_extra_characters() throws Exception {
+        HttpResponse<String> response = issue(serviceAccountClientUuid, "{\"lifespan\": 3600}", adminToken());
+        assertEquals(200, response.statusCode(), response.body());
+        String token = objectMapper.readTree(response.body()).get("token").asText();
+
+        assertEquals(401, checkBasic("user:" + token + "\n").statusCode());
+        assertEquals(401, checkBasic("user: " + token).statusCode());
+        assertEquals(401, checkBasic("user:" + token.replaceFirst("\\.", "=.")).statusCode());
     }
 
     @Test
@@ -427,6 +440,7 @@ public class LongLivedTokenTest {
                 .build();
         return http.send(request, HttpResponse.BodyHandlers.ofString());
     }
+
     private static String viewerToken() throws IOException, InterruptedException {
         if (realm.users().search("viewer", true).isEmpty()) {
             UserRepresentation user = new UserRepresentation();
