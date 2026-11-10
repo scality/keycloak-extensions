@@ -22,12 +22,14 @@ import org.junit.jupiter.api.Test;
 import org.keycloak.TokenVerifier;
 import org.keycloak.admin.client.Keycloak;
 import org.keycloak.admin.client.resource.RealmResource;
+import org.keycloak.common.util.MultivaluedHashMap;
 import org.keycloak.crypto.KeyUse;
 import org.keycloak.jose.jwk.JSONWebKeySet;
 import org.keycloak.jose.jwk.JWK;
 import org.keycloak.jose.jwk.JWKParser;
 import org.keycloak.representations.AccessToken;
 import org.keycloak.representations.idm.ClientRepresentation;
+import org.keycloak.representations.idm.ComponentRepresentation;
 import org.keycloak.representations.idm.CredentialRepresentation;
 import org.keycloak.representations.idm.RealmRepresentation;
 import org.keycloak.representations.idm.RoleRepresentation;
@@ -50,6 +52,7 @@ public class LongLivedTokenTest {
     private static final long TEN_HOURS = 10 * 60 * 60;
     private static final long ONE_YEAR = 365L * 24 * 60 * 60;
     private static final long TWO_DAYS = 2L * 24 * 60 * 60;
+    private static final String KEY_PROVIDER_TYPE = "org.keycloak.keys.KeyProvider";
 
     private static final ObjectMapper objectMapper = new ObjectMapper();
     private static final HttpClient http = HttpClient.newHttpClient();
@@ -137,6 +140,76 @@ public class LongLivedTokenTest {
         assertTrue(row.contains("dashboard"), row);
         assertTrue(row.contains(String.valueOf(token.getExp())), row);
         assertTrue(row.contains(adminUserId), row);
+    }
+
+    @Test
+    public void token_is_signed_with_its_own_published_key() throws Exception {
+        String token = issueToken(serviceAccountClientUuid, "{\"lifespan\": 3600}");
+        String jti = verify(token).getId();
+
+        assertEquals(jti, TokenVerifier.create(token, AccessToken.class).getHeader().getKeyId());
+        assertTrue(certKeyIds().contains(jti));
+        assertEquals("RS256|t", queryRegistry("SELECT ALGORITHM, PUBLIC_KEY IS NOT NULL FROM LONG_LIVED_TOKEN WHERE JTI = '"
+                + jti + "'").trim());
+    }
+
+    @Test
+    public void token_outlives_a_rotation_of_the_realm_keys() throws Exception {
+        String token = issueToken(serviceAccountClientUuid, "{\"lifespan\": 3600}");
+        String realmId = realm.toRepresentation().getId();
+        List<ComponentRepresentation> realmKeys = realm.components().query(realmId, KEY_PROVIDER_TYPE).stream()
+                .filter(component -> "rsa-generated".equals(component.getProviderId()))
+                .toList();
+
+        ComponentRepresentation rotated = new ComponentRepresentation();
+        rotated.setName("rotated");
+        rotated.setProviderId("rsa-generated");
+        rotated.setProviderType(KEY_PROVIDER_TYPE);
+        rotated.setParentId(realmId);
+        rotated.setConfig(new MultivaluedHashMap<>(Map.of("priority", List.of("200"))));
+        realm.components().add(rotated).close();
+        for (ComponentRepresentation key : realmKeys) {
+            key.getConfig().putSingle("enabled", "false");
+            realm.components().component(key.getId()).update(key);
+        }
+
+        verify(token);
+    }
+
+    @Test
+    public void disabling_the_key_provider_unpublishes_every_token_key() throws Exception {
+        String jti = verify(issueToken(serviceAccountClientUuid, "{\"lifespan\": 3600}")).getId();
+        ComponentRepresentation provider = realm.components()
+                .query(realm.toRepresentation().getId(), KEY_PROVIDER_TYPE).stream()
+                .filter(component -> "long-lived-tokens".equals(component.getProviderId()))
+                .findFirst().orElseThrow();
+
+        provider.getConfig().putSingle("enabled", "false");
+        realm.components().component(provider.getId()).update(provider);
+        assertFalse(certKeyIds().contains(jti));
+
+        provider.getConfig().putSingle("enabled", "true");
+        realm.components().component(provider.getId()).update(provider);
+        assertTrue(certKeyIds().contains(jti));
+    }
+
+    @Test
+    public void client_signing_with_an_elliptic_curve_gets_a_token_signed_the_same_way() throws Exception {
+        String clientUuid = createClient("ec-app", false, true);
+        setAccessTokenAlgorithm(clientUuid, "ES256");
+
+        String token = issueToken(clientUuid, "{\"lifespan\": 3600}");
+
+        assertEquals("ES256", TokenVerifier.create(token, AccessToken.class).getHeader().getRawAlgorithm());
+        verify(token);
+    }
+
+    @Test
+    public void client_signing_with_a_shared_secret_is_rejected() throws Exception {
+        String clientUuid = createClient("hmac-app", false, true);
+        setAccessTokenAlgorithm(clientUuid, "HS256");
+
+        assertEquals(400, issue(clientUuid, "{}", adminToken()).statusCode());
     }
 
     @Test
@@ -309,6 +382,21 @@ public class LongLivedTokenTest {
         return createdId(realm.clients().create(client));
     }
 
+    private static void setAccessTokenAlgorithm(String clientUuid, String algorithm) {
+        ClientRepresentation client = realm.clients().get(clientUuid).toRepresentation();
+        client.getAttributes().put("access.token.signed.response.alg", algorithm);
+        realm.clients().get(clientUuid).update(client);
+    }
+
+    private static List<String> certKeyIds() throws IOException, InterruptedException {
+        HttpResponse<String> certs = http.send(
+                HttpRequest.newBuilder().uri(URI.create(realmUrl() + "/protocol/openid-connect/certs")).build(),
+                HttpResponse.BodyHandlers.ofString());
+        return List.of(objectMapper.readValue(certs.body(), JSONWebKeySet.class).getKeys()).stream()
+                .map(JWK::getKeyId)
+                .toList();
+    }
+
     private static String createdId(Response response) {
         try (response) {
             assertEquals(201, response.getStatus());
@@ -331,6 +419,12 @@ public class LongLivedTokenTest {
                 .POST(HttpRequest.BodyPublishers.ofString(body))
                 .build();
         return http.send(request, HttpResponse.BodyHandlers.ofString());
+    }
+
+    private static String issueToken(String clientUuid, String body) throws Exception {
+        HttpResponse<String> response = issue(clientUuid, body, adminToken());
+        assertEquals(200, response.statusCode(), response.body());
+        return objectMapper.readTree(response.body()).get("token").asText();
     }
 
     private static String clientCredentialsToken(String clientId) throws IOException, InterruptedException {
