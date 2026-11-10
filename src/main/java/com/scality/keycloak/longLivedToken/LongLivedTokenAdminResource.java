@@ -1,5 +1,6 @@
 package com.scality.keycloak.longLivedToken;
 
+import java.security.KeyPair;
 import java.time.Duration;
 
 import io.quarkus.runtime.configuration.DurationConverter;
@@ -10,10 +11,16 @@ import org.eclipse.microprofile.openapi.annotations.tags.Tag;
 import org.jboss.logging.Logger;
 import org.jboss.resteasy.reactive.NoCache;
 import org.keycloak.OAuth2Constants;
+import org.keycloak.TokenCategory;
 import org.keycloak.common.ClientConnection;
 import org.keycloak.common.constants.ServiceAccountConstants;
 import org.keycloak.connections.jpa.JpaConnectionProvider;
+import org.keycloak.crypto.KeyWrapper;
+import org.keycloak.crypto.SignatureException;
+import org.keycloak.crypto.SignatureProvider;
+import org.keycloak.crypto.SignatureSignerContext;
 import org.keycloak.events.admin.OperationType;
+import org.keycloak.jose.jws.JWSBuilder;
 import org.keycloak.models.AbstractKeycloakTransaction;
 import org.keycloak.models.ClientModel;
 import org.keycloak.models.ClientSessionContext;
@@ -96,13 +103,23 @@ public class LongLivedTokenAdminResource {
         ClientModel previousClient = session.getContext().getClient();
         session.getContext().setClient(client);
         AccessToken token;
+        String algorithm;
+        KeyPair keyPair;
         String encoded;
         try {
+            algorithm = session.tokens().signatureAlgorithm(TokenCategory.ACCESS);
+            if (!LongLivedTokenSigningKeys.isSupported(algorithm)) {
+                throw new BadRequestException("Client signs access tokens with " + algorithm
+                        + ", which long-lived tokens do not support: their keys are published, so they need an"
+                        + " asymmetric algorithm");
+            }
             token = createAccessToken(client, serviceAccount, lifespan);
-            encoded = session.tokens().encode(token);
+            keyPair = LongLivedTokenSigningKeys.generate(algorithm);
+            encoded = sign(token, client, LongLivedTokenSigningKeys.signingKey(token.getId(), algorithm, keyPair));
         } finally {
             session.getContext().setClient(previousClient);
         }
+        LongLivedTokenKeyProviderFactory.ensureComponent(realm);
 
         UserModel issuer = auth.adminAuth().getUser();
         LongLivedTokenEntity entity = new LongLivedTokenEntity();
@@ -113,6 +130,8 @@ public class LongLivedTokenAdminResource {
         entity.setIat(token.getIat());
         entity.setExp(token.getExp());
         entity.setCreatedBy(issuer.getId());
+        entity.setAlgorithm(algorithm);
+        entity.setPublicKey(LongLivedTokenSigningKeys.encode(keyPair.getPublic()));
         session.getProvider(JpaConnectionProvider.class).getEntityManager().persist(entity);
 
         adminEvent.operation(OperationType.CREATE)
@@ -135,6 +154,18 @@ public class LongLivedTokenAdminResource {
         });
 
         return new LongLivedTokenResponse(encoded, token.getId(), token.getExp());
+    }
+
+    private String sign(AccessToken token, ClientModel client, KeyWrapper key) {
+        String type = OIDCAdvancedConfigWrapper.fromClientModel(client).isUseRfc9068AccessTokenHeaderType()
+                ? "at+jwt" : "JWT";
+        try {
+            SignatureSignerContext signer = session.getProvider(SignatureProvider.class, key.getAlgorithm())
+                    .signer(key);
+            return new JWSBuilder().type(type).jsonContent(token).sign(signer);
+        } catch (SignatureException e) {
+            throw new IllegalStateException("Cannot sign long-lived token " + token.getId(), e);
+        }
     }
 
     // Jackson coerces a JSON number into this String field and DurationConverter reads a bare
