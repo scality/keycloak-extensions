@@ -46,7 +46,8 @@ final class LongLivedTokenSigningKeys {
         if (spec.curve() == null) {
             return KeyUtils.generateRsaKeyPair(RSA_KEY_SIZE);
         }
-        return KeyUtils.generateEcKeyPair(AbstractEcKeyProviderFactory.convertECDomainParmNistRepToSecRep(spec.curve()));
+        return AbstractEcKeyProviderFactory.generateEcKeyPair(
+                AbstractEcKeyProviderFactory.convertECDomainParmNistRepToSecRep(spec.curve()));
     }
 
     static KeyWrapper signingKey(String kid, String algorithm, KeyPair keyPair) {
