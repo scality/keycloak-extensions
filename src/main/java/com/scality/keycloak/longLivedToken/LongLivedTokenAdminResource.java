@@ -111,7 +111,7 @@ public class LongLivedTokenAdminResource {
             if (!LongLivedTokenSigningKeys.isSupported(algorithm)) {
                 throw new BadRequestException("Client signs access tokens with " + algorithm
                         + ", which long-lived tokens do not support: their keys are published, so they need an"
-                        + " asymmetric algorithm");
+                        + " RS*, PS* or ES* algorithm");
             }
             token = createAccessToken(client, serviceAccount, lifespan);
             keyPair = LongLivedTokenSigningKeys.generate(algorithm);
