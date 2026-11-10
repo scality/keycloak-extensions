@@ -297,27 +297,29 @@ public class LongLivedTokenTest {
 
     @Test
     public void caller_without_manage_clients_is_forbidden() throws Exception {
-        UserRepresentation user = new UserRepresentation();
-        user.setUsername("viewer");
-        user.setEnabled(true);
-        user.setFirstName("View");
-        user.setLastName("Only");
-        user.setEmail("viewer@example.com");
-        user.setEmailVerified(true);
-        CredentialRepresentation password = new CredentialRepresentation();
-        password.setType(CredentialRepresentation.PASSWORD);
-        password.setValue("viewer");
-        password.setTemporary(false);
-        user.setCredentials(List.of(password));
-        String userId = createdId(realm.users().create(user));
-
-        String realmManagement = realm.clients().findByClientId("realm-management").get(0).getId();
-        realm.users().get(userId).roles().clientLevel(realmManagement)
-                .add(List.of(realm.clients().get(realmManagement).roles().get("view-clients").toRepresentation()));
-
-        HttpResponse<String> response = issue(serviceAccountClientUuid, "{}", passwordToken("viewer", "viewer"));
+        HttpResponse<String> response = issue(serviceAccountClientUuid, "{}", viewerToken());
 
         assertEquals(403, response.statusCode(), response.body());
+    }
+
+    @Test
+    public void revoked_token_key_leaves_the_jwks() throws Exception {
+        String token = issueToken(serviceAccountClientUuid, "{\"lifespan\": 3600}");
+        String jti = verify(token).getId();
+
+        assertEquals(204, revoke(jti, adminToken()).statusCode());
+
+        assertFalse(certKeyIds().contains(jti));
+        assertEquals("t", queryRegistry("SELECT REVOKED FROM LONG_LIVED_TOKEN WHERE JTI = '" + jti + "'").trim());
+        assertEquals(204, revoke(jti, adminToken()).statusCode());
+    }
+
+    @Test
+    public void revoking_needs_manage_on_the_client_and_a_known_token() throws Exception {
+        String jti = verify(issueToken(serviceAccountClientUuid, "{\"lifespan\": 3600}")).getId();
+
+        assertEquals(403, revoke(jti, viewerToken()).statusCode());
+        assertEquals(404, revoke("unknown-jti", adminToken()).statusCode());
     }
 
     @Test
@@ -430,6 +432,39 @@ public class LongLivedTokenTest {
         HttpResponse<String> response = issue(clientUuid, body, adminToken());
         assertEquals(200, response.statusCode(), response.body());
         return objectMapper.readTree(response.body()).get("token").asText();
+    }
+
+    private static HttpResponse<String> revoke(String jti, String bearer) throws IOException, InterruptedException {
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(keycloak.getAuthServerUrl() + "/admin/realms/" + REALM
+                        + "/long-lived-tokens/" + jti + "/revoke"))
+                .header("Authorization", "Bearer " + bearer)
+                .POST(HttpRequest.BodyPublishers.noBody())
+                .build();
+        return http.send(request, HttpResponse.BodyHandlers.ofString());
+    }
+
+    private static String viewerToken() throws IOException, InterruptedException {
+        if (realm.users().search("viewer", true).isEmpty()) {
+            UserRepresentation user = new UserRepresentation();
+            user.setUsername("viewer");
+            user.setEnabled(true);
+            user.setFirstName("View");
+            user.setLastName("Only");
+            user.setEmail("viewer@example.com");
+            user.setEmailVerified(true);
+            CredentialRepresentation password = new CredentialRepresentation();
+            password.setType(CredentialRepresentation.PASSWORD);
+            password.setValue("viewer");
+            password.setTemporary(false);
+            user.setCredentials(List.of(password));
+            String userId = createdId(realm.users().create(user));
+
+            String realmManagement = realm.clients().findByClientId("realm-management").get(0).getId();
+            realm.users().get(userId).roles().clientLevel(realmManagement)
+                    .add(List.of(realm.clients().get(realmManagement).roles().get("view-clients").toRepresentation()));
+        }
+        return passwordToken("viewer", "viewer");
     }
 
     private static String clientCredentialsToken(String clientId) throws IOException, InterruptedException {
