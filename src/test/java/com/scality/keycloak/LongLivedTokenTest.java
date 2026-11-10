@@ -13,6 +13,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.security.PublicKey;
 import java.time.Duration;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 
@@ -23,12 +24,14 @@ import org.keycloak.TokenVerifier;
 import org.keycloak.admin.client.Keycloak;
 import org.keycloak.admin.client.resource.RealmResource;
 import org.keycloak.common.crypto.CryptoIntegration;
+import org.keycloak.common.util.KeyUtils;
 import org.keycloak.common.util.MultivaluedHashMap;
 import org.keycloak.crypto.KeyUse;
 import org.keycloak.crypto.def.DefaultCryptoProvider;
 import org.keycloak.jose.jwk.JSONWebKeySet;
 import org.keycloak.jose.jwk.JWK;
 import org.keycloak.jose.jwk.JWKParser;
+import org.keycloak.jose.jws.JWSBuilder;
 import org.keycloak.representations.AccessToken;
 import org.keycloak.representations.idm.ClientRepresentation;
 import org.keycloak.representations.idm.ComponentRepresentation;
@@ -179,6 +182,7 @@ public class LongLivedTokenTest {
         }
 
         verify(token);
+        assertEquals(200, check(token, "GET").statusCode());
     }
 
     @Test
@@ -207,6 +211,7 @@ public class LongLivedTokenTest {
 
         assertEquals("ES256", TokenVerifier.create(token, AccessToken.class).getHeader().getRawAlgorithm());
         verify(token);
+        assertEquals(200, check(token, "GET").statusCode());
     }
 
     @Test
@@ -320,6 +325,110 @@ public class LongLivedTokenTest {
 
         assertEquals(403, revoke(jti, viewerToken()).statusCode());
         assertEquals(404, revoke("unknown-jti", adminToken()).statusCode());
+    }
+
+    @Test
+    public void revoked_token_is_refused_by_the_check() throws Exception {
+        String token = issueToken(serviceAccountClientUuid, "{\"lifespan\": 3600}");
+        String jti = verify(token).getId();
+        assertEquals(200, check(token, "GET").statusCode());
+        assertEquals(200, check(token, "POST").statusCode());
+
+        assertEquals(204, revoke(jti, adminToken()).statusCode());
+
+        assertEquals(401, check(token, "GET").statusCode());
+        assertEquals(401, check(token, "DELETE").statusCode());
+        assertEquals(401, check(token, "OPTIONS").statusCode());
+    }
+
+    @Test
+    public void check_refuses_a_token_missing_from_the_registry() throws Exception {
+        String token = issueToken(serviceAccountClientUuid, "{\"lifespan\": 3600}");
+
+        queryRegistry("DELETE FROM LONG_LIVED_TOKEN WHERE JTI = '" + verify(token).getId() + "'");
+
+        assertEquals(401, check(token, "GET").statusCode());
+    }
+
+    @Test
+    public void check_refuses_a_token_whose_client_was_deleted() throws Exception {
+        String clientUuid = createClient("deleted-app", false, true);
+        String token = issueToken(clientUuid, "{\"lifespan\": 3600}");
+
+        realm.clients().get(clientUuid).remove();
+
+        assertEquals(401, check(token, "GET").statusCode());
+    }
+
+    @Test
+    public void check_refuses_an_expired_token() throws Exception {
+        String token = issueToken(serviceAccountClientUuid, "{\"lifespan\": 1}");
+
+        Thread.sleep(2000);
+
+        assertEquals(401, check(token, "GET").statusCode());
+    }
+
+    @Test
+    public void check_refuses_a_token_once_its_client_is_disabled() throws Exception {
+        String clientUuid = createClient("disabled-later-app", false, true);
+        String token = issueToken(clientUuid, "{\"lifespan\": 3600}");
+        assertEquals(200, check(token, "GET").statusCode());
+
+        ClientRepresentation client = realm.clients().get(clientUuid).toRepresentation();
+        client.setEnabled(false);
+        realm.clients().get(clientUuid).update(client);
+
+        assertEquals(401, check(token, "GET").statusCode());
+    }
+
+    @Test
+    public void check_refuses_a_token_once_its_service_account_is_disabled() throws Exception {
+        String clientUuid = createClient("disabled-account-app", false, true);
+        String token = issueToken(clientUuid, "{\"lifespan\": 3600}");
+        assertEquals(200, check(token, "GET").statusCode());
+
+        UserRepresentation serviceAccount = realm.clients().get(clientUuid).getServiceAccountUser();
+        serviceAccount.setEnabled(false);
+        realm.users().get(serviceAccount.getId()).update(serviceAccount);
+
+        assertEquals(401, check(token, "GET").statusCode());
+    }
+
+    @Test
+    public void check_refuses_a_long_lived_token_the_realm_cannot_verify() throws Exception {
+        assertEquals(401, check(foreignToken(true), "GET").statusCode());
+    }
+
+    @Test
+    public void check_leaves_other_tokens_to_the_proxy() throws Exception {
+        assertEquals(200, check(null, "GET").statusCode());
+        assertEquals(200, check(clientCredentialsToken("monitoring"), "GET").statusCode());
+        assertEquals(200, check(foreignToken(false), "GET").statusCode());
+        assertEquals(200, check("opaque.api.key", "GET").statusCode());
+    }
+
+    @Test
+    public void check_refuses_an_authorization_the_proxy_could_read_differently() throws Exception {
+        String token = issueToken(serviceAccountClientUuid, "{\"lifespan\": 3600}");
+
+        assertEquals(401, check("not-a-jwt", "GET").statusCode());
+        assertEquals(401, check(token + " trailing", "GET").statusCode());
+        assertEquals(401, checkAuthorization("Bearer " + token, "Bearer " + token).statusCode());
+        assertEquals(401, checkAuthorization("Bearer\t" + token).statusCode());
+        assertEquals(401, checkAuthorization("Bearer").statusCode());
+    }
+
+    @Test
+    public void check_refuses_basic_credentials_even_with_a_valid_token() throws Exception {
+        String token = issueToken(serviceAccountClientUuid, "{\"lifespan\": 3600}");
+
+        assertEquals(401, checkBasic(token + ":").statusCode());
+        assertEquals(401, checkBasic("user:" + token).statusCode());
+        assertEquals(401, checkBasic("user:password").statusCode());
+        assertEquals(401, checkAuthorization("basic " + Base64.getEncoder()
+                .encodeToString((token + ":").getBytes(StandardCharsets.UTF_8))).statusCode());
+        assertEquals(401, checkAuthorization("Basic").statusCode());
     }
 
     @Test
@@ -442,6 +551,43 @@ public class LongLivedTokenTest {
                 .POST(HttpRequest.BodyPublishers.noBody())
                 .build();
         return http.send(request, HttpResponse.BodyHandlers.ofString());
+    }
+
+    private static HttpResponse<String> check(String bearer, String method) throws IOException, InterruptedException {
+        HttpRequest.Builder request = HttpRequest.newBuilder()
+                .uri(URI.create(realmUrl() + "/long-lived-tokens/check"))
+                .method(method, HttpRequest.BodyPublishers.noBody());
+        if (bearer != null) {
+            request.header("Authorization", "Bearer " + bearer);
+        }
+        return http.send(request.build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    private static HttpResponse<String> checkAuthorization(String... authorizations)
+            throws IOException, InterruptedException {
+        HttpRequest.Builder request = HttpRequest.newBuilder()
+                .uri(URI.create(realmUrl() + "/long-lived-tokens/check"))
+                .GET();
+        for (String authorization : authorizations) {
+            request.header("Authorization", authorization);
+        }
+        return http.send(request.build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    private static HttpResponse<String> checkBasic(String credentials) throws IOException, InterruptedException {
+        return checkAuthorization("Basic "
+                + Base64.getEncoder().encodeToString(credentials.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    private static String foreignToken(boolean longLived) {
+        AccessToken token = new AccessToken();
+        token.id("foreign");
+        token.issuer(realmUrl());
+        token.exp(System.currentTimeMillis() / 1000 + 3600);
+        if (longLived) {
+            token.setOtherClaims("long_lived", true);
+        }
+        return new JWSBuilder().kid("foreign").jsonContent(token).rsa256(KeyUtils.generateRsaKeyPair(2048).getPrivate());
     }
 
     private static String viewerToken() throws IOException, InterruptedException {
