@@ -22,8 +22,10 @@ import org.junit.jupiter.api.Test;
 import org.keycloak.TokenVerifier;
 import org.keycloak.admin.client.Keycloak;
 import org.keycloak.admin.client.resource.RealmResource;
+import org.keycloak.common.crypto.CryptoIntegration;
 import org.keycloak.common.util.MultivaluedHashMap;
 import org.keycloak.crypto.KeyUse;
+import org.keycloak.crypto.def.DefaultCryptoProvider;
 import org.keycloak.jose.jwk.JSONWebKeySet;
 import org.keycloak.jose.jwk.JWK;
 import org.keycloak.jose.jwk.JWKParser;
@@ -69,6 +71,9 @@ public class LongLivedTokenTest {
     // Keycloak holds the database open.
     @BeforeAll
     static void startKeycloak() {
+        // The tests read and build keys themselves. Set explicitly: the test classpath also holds the
+        // FIPS provider, which detection could pick and which cannot run here.
+        CryptoIntegration.setProvider(new DefaultCryptoProvider());
         network = Network.newNetwork();
         postgres = new GenericContainer<>("postgres:16-alpine")
                 .withNetwork(network)
