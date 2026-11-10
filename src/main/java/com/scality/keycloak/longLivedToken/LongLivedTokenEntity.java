@@ -9,6 +9,8 @@ import jakarta.persistence.Table;
 @Table(name = "LONG_LIVED_TOKEN")
 public class LongLivedTokenEntity {
 
+    static final String ACTIVE_IN_REALM = "t.realmId = :realmId AND t.revoked = false AND t.exp > :now";
+
     @Id
     @Column(name = "JTI", nullable = false)
     private String jti;
@@ -33,6 +35,13 @@ public class LongLivedTokenEntity {
 
     @Column(name = "CREATED_BY")
     private String createdBy;
+
+    // Null for tokens issued before per-token keys, which the realm key signed.
+    @Column(name = "ALGORITHM")
+    private String algorithm;
+
+    @Column(name = "PUBLIC_KEY")
+    private String publicKey;
 
     public String getJti() {
         return jti;
@@ -96,6 +105,22 @@ public class LongLivedTokenEntity {
 
     public void setCreatedBy(String createdBy) {
         this.createdBy = createdBy;
+    }
+
+    public String getAlgorithm() {
+        return algorithm;
+    }
+
+    public void setAlgorithm(String algorithm) {
+        this.algorithm = algorithm;
+    }
+
+    public String getPublicKey() {
+        return publicKey;
+    }
+
+    public void setPublicKey(String publicKey) {
+        this.publicKey = publicKey;
     }
 
     @Override
