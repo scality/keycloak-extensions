@@ -22,7 +22,7 @@ The token is returned once and recorded in the `LONG_LIVED_TOKEN` registry.
 Each token is signed with a key pair of its own, whose key id is the token's `jti`. The private key is dropped once the token is signed. The public key is published in the realm JWKS by the `long-lived-tokens` key provider (*Realm settings → Keys*), which Keycloak creates on the first issuance.
 
 - `POST /admin/realms/{realm}/long-lived-tokens/{jti}/revoke` revokes a token: its key leaves the JWKS, so Keycloak refuses it at once. A verifier that cached the JWKS keeps accepting it until it fetches the JWKS again.
-- `GET /realms/{realm}/long-lived-tokens/check`, for an ingress `auth-url`, answers 401 to a revoked or invalid long-lived token at once, whatever JWKS the upstream verifier cached. It answers 200 to requests without one, which the upstream judges as before, and 401 to Basic credentials.
+- `GET /realms/{realm}/long-lived-tokens/check`, for an ingress `auth-url`, answers 401 to a revoked or invalid long-lived token at once, whatever JWKS the upstream verifier cached. It answers 200 to requests without one, which the upstream judges as before, and 401 to Basic credentials and to a Bearer value that is not a JWT.
 - A rotation of the realm keys does not affect long-lived tokens.
 - Disabling the `long-lived-tokens` key provider makes every long-lived token of the realm unverifiable until it is enabled again. Use it as an emergency switch only. A deleted provider is created again on the next issuance, and the tokens come back with it.
 - The client must sign its access tokens with an asymmetric algorithm (RS, PS or ES). A client set to HS256 cannot get one.
