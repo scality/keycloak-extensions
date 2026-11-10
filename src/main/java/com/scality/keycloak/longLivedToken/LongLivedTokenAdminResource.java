@@ -74,13 +74,15 @@ public class LongLivedTokenAdminResource {
     private final RealmModel realm;
     private final AdminPermissionEvaluator auth;
     private final AdminEventBuilder adminEvent;
+    private final int maxActiveTokens;
 
     public LongLivedTokenAdminResource(KeycloakSession session, RealmModel realm, AdminPermissionEvaluator auth,
-            AdminEventBuilder adminEvent) {
+            AdminEventBuilder adminEvent, int maxActiveTokens) {
         this.session = session;
         this.realm = realm;
         this.auth = auth;
         this.adminEvent = adminEvent.resource(ADMIN_EVENT_RESOURCE);
+        this.maxActiveTokens = maxActiveTokens;
     }
 
     @POST
@@ -104,6 +106,7 @@ public class LongLivedTokenAdminResource {
         Duration lifespan = validateLifespan(request.lifespan());
         String label = validateLabel(request.label());
         UserModel serviceAccount = requireServiceAccount(client);
+        requireRoomForAnotherToken();
 
         // The context client drives the client scopes and the signature algorithm, so the token is
         // built and signed as the client's own access tokens are, not as the admin console's.
@@ -248,6 +251,20 @@ public class LongLivedTokenAdminResource {
             protected void rollbackImpl() {
             }
         });
+    }
+
+    // Two concurrent issuances can go one over the limit, which is harmless.
+    private void requireRoomForAnotherToken() {
+        long active = getEntityManager()
+                .createQuery("SELECT COUNT(t) FROM LongLivedTokenEntity t WHERE " + LongLivedTokenEntity.ACTIVE_IN_REALM,
+                        Long.class)
+                .setParameter("realmId", realm.getId())
+                .setParameter("now", (long) Time.currentTime())
+                .getSingleResult();
+        if (active >= maxActiveTokens) {
+            throw new ClientErrorException("The realm already has " + active
+                    + " active long-lived tokens, the maximum; revoke one first", Response.Status.CONFLICT);
+        }
     }
 
     private String sign(AccessToken token, ClientModel client, KeyWrapper key) {
