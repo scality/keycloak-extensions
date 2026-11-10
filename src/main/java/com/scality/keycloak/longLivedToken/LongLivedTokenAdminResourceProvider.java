@@ -17,8 +17,18 @@ public class LongLivedTokenAdminResourceProvider
         return this;
     }
 
+    // Every OIDC client of the realm downloads the JWKS, which holds one key per active token.
+    // An RSA-2048 key is about 500 bytes of JWK, so 20 keys add about 10 KB.
+    static final int DEFAULT_MAX_ACTIVE_TOKENS = 20;
+
+    private int maxActiveTokens = DEFAULT_MAX_ACTIVE_TOKENS;
+
     @Override
     public void init(Scope config) {
+        maxActiveTokens = config.getInt("maxActiveTokens", DEFAULT_MAX_ACTIVE_TOKENS);
+        if (maxActiveTokens < 1) {
+            throw new IllegalArgumentException("maxActiveTokens must be at least 1, got " + maxActiveTokens);
+        }
     }
 
     @Override
@@ -37,7 +47,7 @@ public class LongLivedTokenAdminResourceProvider
     @Override
     public Object getResource(KeycloakSession session, RealmModel realm, AdminPermissionEvaluator auth,
             AdminEventBuilder adminEvent) {
-        return new LongLivedTokenAdminResource(session, realm, auth, adminEvent);
+        return new LongLivedTokenAdminResource(session, realm, auth, adminEvent, maxActiveTokens);
     }
 
 }
