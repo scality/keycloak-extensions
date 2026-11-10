@@ -92,8 +92,9 @@ public class LongLivedTokenTest {
                 .withEnv("KC_DB_URL", "jdbc:postgresql://postgres:5432/keycloak")
                 .withEnv("KC_DB_USERNAME", "keycloak")
                 .withEnv("KC_DB_PASSWORD", "keycloak")
-                // Raised so this suite never reaches the limit.
-                .withEnv("KC_SPI_ADMIN_REALM_RESTAPI_EXTENSION__LONG_LIVED_TOKENS__MAX_ACTIVE_TOKENS", "100");
+                // Raised so this suite never reaches the limits.
+                .withEnv("KC_SPI_ADMIN_REALM_RESTAPI_EXTENSION__LONG_LIVED_TOKENS__MAX_ACTIVE_TOKENS", "100")
+                .withEnv("KC_SPI_ADMIN_REALM_RESTAPI_EXTENSION__LONG_LIVED_TOKENS__MAX_ACTIVE_TOKENS_PER_CLIENT", "100");
         keycloak.start();
 
         Keycloak admin = keycloak.getKeycloakAdminClient();

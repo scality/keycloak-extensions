@@ -46,6 +46,7 @@ import org.keycloak.sessions.AuthenticationSessionModel;
 import org.keycloak.sessions.RootAuthenticationSessionModel;
 
 import jakarta.persistence.EntityManager;
+import jakarta.persistence.TypedQuery;
 import jakarta.ws.rs.BadRequestException;
 import jakarta.ws.rs.ClientErrorException;
 import jakarta.ws.rs.Consumes;
@@ -75,14 +76,16 @@ public class LongLivedTokenAdminResource {
     private final AdminPermissionEvaluator auth;
     private final AdminEventBuilder adminEvent;
     private final int maxActiveTokens;
+    private final int maxActiveTokensPerClient;
 
     public LongLivedTokenAdminResource(KeycloakSession session, RealmModel realm, AdminPermissionEvaluator auth,
-            AdminEventBuilder adminEvent, int maxActiveTokens) {
+            AdminEventBuilder adminEvent, int maxActiveTokens, int maxActiveTokensPerClient) {
         this.session = session;
         this.realm = realm;
         this.auth = auth;
         this.adminEvent = adminEvent.resource(ADMIN_EVENT_RESOURCE);
         this.maxActiveTokens = maxActiveTokens;
+        this.maxActiveTokensPerClient = maxActiveTokensPerClient;
     }
 
     @POST
@@ -106,7 +109,7 @@ public class LongLivedTokenAdminResource {
         Duration lifespan = validateLifespan(request.lifespan());
         String label = validateLabel(request.label());
         UserModel serviceAccount = requireServiceAccount(client);
-        requireRoomForAnotherToken();
+        requireRoomForAnotherToken(client);
 
         // The context client drives the client scopes and the signature algorithm, so the token is
         // built and signed as the client's own access tokens are, not as the admin console's.
@@ -253,18 +256,31 @@ public class LongLivedTokenAdminResource {
         });
     }
 
-    // Two concurrent issuances can go one over the limit, which is harmless.
-    private void requireRoomForAnotherToken() {
-        long active = getEntityManager()
-                .createQuery("SELECT COUNT(t) FROM LongLivedTokenEntity t WHERE " + LongLivedTokenEntity.ACTIVE_IN_REALM,
-                        Long.class)
-                .setParameter("realmId", realm.getId())
-                .setParameter("now", (long) Time.currentTime())
-                .getSingleResult();
-        if (active >= maxActiveTokens) {
-            throw new ClientErrorException("The realm already has " + active
+    // Two concurrent issuances can go one over a limit, which is harmless. The client limit is checked
+    // first, so an admin who manages only this client is told about a limit they can act on.
+    private void requireRoomForAnotherToken(ClientModel client) {
+        long activeForClient = countActiveTokens(client);
+        if (activeForClient >= maxActiveTokensPerClient) {
+            throw new ClientErrorException("Client " + client.getClientId() + " already has " + activeForClient
                     + " active long-lived tokens, the maximum; revoke one first", Response.Status.CONFLICT);
         }
+        long activeInRealm = countActiveTokens(null);
+        if (activeInRealm >= maxActiveTokens) {
+            throw new ClientErrorException("The realm already has " + activeInRealm
+                    + " active long-lived tokens, the maximum; revoke one first", Response.Status.CONFLICT);
+        }
+    }
+
+    private long countActiveTokens(ClientModel client) {
+        TypedQuery<Long> query = getEntityManager()
+                .createQuery("SELECT COUNT(t) FROM LongLivedTokenEntity t WHERE " + LongLivedTokenEntity.ACTIVE_IN_REALM
+                        + (client == null ? "" : " AND t.clientId = :clientId"), Long.class)
+                .setParameter("realmId", realm.getId())
+                .setParameter("now", (long) Time.currentTime());
+        if (client != null) {
+            query.setParameter("clientId", client.getId());
+        }
+        return query.getSingleResult();
     }
 
     private String sign(AccessToken token, ClientModel client, KeyWrapper key) {

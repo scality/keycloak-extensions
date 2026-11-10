@@ -1,6 +1,7 @@
 package com.scality.keycloak;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -29,24 +30,27 @@ public class LongLivedTokenLimitTest {
     private static final TokenProvider tokenProvider = new TokenProvider();
 
     private static KeycloakContainer keycloak;
-    private static String clientUuid;
+    private static RealmResource realm;
 
     @BeforeAll
     static void startKeycloak() {
         keycloak = FullImageName.createContainer()
                 .withStartupTimeout(Duration.ofMinutes(5))
                 .withProviderClassesFrom("target/classes")
-                .withEnv("KC_SPI_ADMIN_REALM_RESTAPI_EXTENSION__LONG_LIVED_TOKENS__MAX_ACTIVE_TOKENS", "2");
+                .withEnv("KC_SPI_ADMIN_REALM_RESTAPI_EXTENSION__LONG_LIVED_TOKENS__MAX_ACTIVE_TOKENS", "3")
+                .withEnv("KC_SPI_ADMIN_REALM_RESTAPI_EXTENSION__LONG_LIVED_TOKENS__MAX_ACTIVE_TOKENS_PER_CLIENT", "2");
         keycloak.start();
 
         RealmRepresentation realmRepresentation = new RealmRepresentation();
         realmRepresentation.setRealm(REALM);
         realmRepresentation.setEnabled(true);
         keycloak.getKeycloakAdminClient().realms().create(realmRepresentation);
-        RealmResource realm = keycloak.getKeycloakAdminClient().realm(REALM);
+        realm = keycloak.getKeycloakAdminClient().realm(REALM);
+    }
 
+    private static String createClient(String clientId) {
         ClientRepresentation client = new ClientRepresentation();
-        client.setClientId("monitoring");
+        client.setClientId(clientId);
         client.setEnabled(true);
         client.setPublicClient(false);
         client.setServiceAccountsEnabled(true);
@@ -54,7 +58,7 @@ public class LongLivedTokenLimitTest {
         try (Response response = realm.clients().create(client)) {
             assertEquals(201, response.getStatus());
             String location = response.getLocation().getPath();
-            clientUuid = location.substring(location.lastIndexOf('/') + 1);
+            return location.substring(location.lastIndexOf('/') + 1);
         }
     }
 
@@ -64,17 +68,28 @@ public class LongLivedTokenLimitTest {
     }
 
     @Test
-    public void only_active_tokens_count_towards_the_realm_limit() throws Exception {
-        String revoked = assertIssued(issue("{\"lifespan\": 3600}"));
-        assertIssued(issue("{\"lifespan\": 3}"));
-        assertEquals(409, issue("{\"lifespan\": 3600}").statusCode());
+    public void only_active_tokens_count_towards_the_client_and_realm_limits() throws Exception {
+        String monitoring = createClient("monitoring");
+        String backup = createClient("backup");
+        String reporting = createClient("reporting");
+
+        String revoked = assertIssued(issue(monitoring, "{\"lifespan\": 3600}"));
+        assertIssued(issue(monitoring, "{\"lifespan\": 3}"));
+        assertRefused(issue(monitoring, "{\"lifespan\": 3600}"), "Client monitoring");
+        assertIssued(issue(backup, "{\"lifespan\": 3600}"));
+        assertRefused(issue(reporting, "{\"lifespan\": 3600}"), "The realm");
 
         Thread.sleep(4000);
-        assertIssued(issue("{\"lifespan\": 3600}"));
-        assertEquals(409, issue("{\"lifespan\": 3600}").statusCode());
+        assertIssued(issue(monitoring, "{\"lifespan\": 3600}"));
+        assertRefused(issue(monitoring, "{\"lifespan\": 3600}"), "Client monitoring");
 
         assertEquals(204, revoke(revoked).statusCode());
-        assertIssued(issue("{\"lifespan\": 3600}"));
+        assertIssued(issue(reporting, "{\"lifespan\": 3600}"));
+    }
+
+    private static void assertRefused(HttpResponse<String> response, String limitHolder) {
+        assertEquals(409, response.statusCode(), response.body());
+        assertTrue(response.body().contains(limitHolder), response.body());
     }
 
     private static String assertIssued(HttpResponse<String> response) throws Exception {
@@ -82,7 +97,7 @@ public class LongLivedTokenLimitTest {
         return objectMapper.readTree(response.body()).get("jti").asText();
     }
 
-    private static HttpResponse<String> issue(String body) throws Exception {
+    private static HttpResponse<String> issue(String clientUuid, String body) throws Exception {
         return http.send(adminRequest("clients/" + clientUuid)
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(body))
