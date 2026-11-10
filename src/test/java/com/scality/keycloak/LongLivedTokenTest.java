@@ -323,6 +323,65 @@ public class LongLivedTokenTest {
     }
 
     @Test
+    public void listing_shows_each_issued_token_and_its_revocation_but_never_the_token() throws Exception {
+        String clientUuid = createClient("listed-app", false, true);
+        HttpResponse<String> issued = issue(clientUuid, "{\"lifespan\": 3600, \"label\": \"dashboards\"}", adminToken());
+        assertEquals(200, issued.statusCode(), issued.body());
+        String jti = objectMapper.readTree(issued.body()).get("jti").asText();
+
+        JsonNode listed = listedToken(clientUuid, jti);
+        assertEquals("dashboards", listed.get("label").asText());
+        assertEquals(verify(objectMapper.readTree(issued.body()).get("token").asText()).getIat(),
+                listed.get("iat").asLong());
+        assertEquals(objectMapper.readTree(issued.body()).get("exp").asLong(), listed.get("exp").asLong());
+        assertEquals(adminUserId, listed.get("createdBy").asText());
+        assertFalse(listed.get("revoked").asBoolean());
+        assertFalse(listed.has("token"));
+
+        assertEquals(204, revoke(jti, adminToken()).statusCode());
+        assertTrue(listedToken(clientUuid, jti).get("revoked").asBoolean());
+    }
+
+    @Test
+    public void listing_puts_the_newest_token_first() throws Exception {
+        String clientUuid = createClient("ordered-app", false, true);
+        String older = objectMapper.readTree(issue(clientUuid, "{}", adminToken()).body()).get("jti").asText();
+        String newer = objectMapper.readTree(issue(clientUuid, "{}", adminToken()).body()).get("jti").asText();
+        queryRegistry("UPDATE LONG_LIVED_TOKEN SET IAT = IAT - 60 WHERE JTI = '" + older + "'");
+
+        JsonNode listed = objectMapper.readTree(list(clientUuid, adminToken()).body());
+        assertEquals(2, listed.size());
+        assertEquals(newer, listed.get(0).get("jti").asText());
+        assertEquals(older, listed.get(1).get("jti").asText());
+    }
+
+    @Test
+    public void listing_needs_view_on_the_client_and_a_known_client() throws Exception {
+        assertEquals(200, list(serviceAccountClientUuid, viewerToken()).statusCode());
+        assertEquals(403, list(serviceAccountClientUuid, noRoleToken()).statusCode());
+        assertEquals(404, list("00000000-0000-0000-0000-000000000000", adminToken()).statusCode());
+    }
+
+    @Test
+    public void only_an_expired_token_can_be_deleted() throws Exception {
+        HttpResponse<String> issued = issue(serviceAccountClientUuid, "{\"lifespan\": 3600}", adminToken());
+        assertEquals(200, issued.statusCode(), issued.body());
+        String jti = objectMapper.readTree(issued.body()).get("jti").asText();
+        String count = "SELECT COUNT(*) FROM LONG_LIVED_TOKEN WHERE JTI = '" + jti + "'";
+
+        assertEquals(409, delete(jti, adminToken()).statusCode());
+        assertEquals(204, revoke(jti, adminToken()).statusCode());
+        assertEquals(409, delete(jti, adminToken()).statusCode());
+        assertEquals("1", queryRegistry(count).trim());
+
+        queryRegistry("UPDATE LONG_LIVED_TOKEN SET EXP = 1 WHERE JTI = '" + jti + "'");
+        assertEquals(403, delete(jti, viewerToken()).statusCode());
+        assertEquals(204, delete(jti, adminToken()).statusCode());
+        assertEquals("0", queryRegistry(count).trim());
+        assertEquals(404, delete(jti, adminToken()).statusCode());
+    }
+
+    @Test
     public void unknown_client_is_not_found() throws Exception {
         assertEquals(404, issue("00000000-0000-0000-0000-000000000000", "{}", adminToken()).statusCode());
     }
@@ -444,27 +503,69 @@ public class LongLivedTokenTest {
         return http.send(request, HttpResponse.BodyHandlers.ofString());
     }
 
+    private static HttpResponse<String> list(String clientUuid, String bearer)
+            throws IOException, InterruptedException {
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(keycloak.getAuthServerUrl() + "/admin/realms/" + REALM
+                        + "/long-lived-tokens/clients/" + clientUuid))
+                .header("Authorization", "Bearer " + bearer)
+                .GET()
+                .build();
+        return http.send(request, HttpResponse.BodyHandlers.ofString());
+    }
+
+    private static HttpResponse<String> delete(String jti, String bearer) throws IOException, InterruptedException {
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(keycloak.getAuthServerUrl() + "/admin/realms/" + REALM
+                        + "/long-lived-tokens/" + jti))
+                .header("Authorization", "Bearer " + bearer)
+                .DELETE()
+                .build();
+        return http.send(request, HttpResponse.BodyHandlers.ofString());
+    }
+
+    private static JsonNode listedToken(String clientUuid, String jti) throws IOException, InterruptedException {
+        HttpResponse<String> response = list(clientUuid, adminToken());
+        assertEquals(200, response.statusCode(), response.body());
+        for (JsonNode token : objectMapper.readTree(response.body())) {
+            if (token.get("jti").asText().equals(jti)) {
+                return token;
+            }
+        }
+        throw new AssertionError("Token " + jti + " missing from " + response.body());
+    }
+
     private static String viewerToken() throws IOException, InterruptedException {
         if (realm.users().search("viewer", true).isEmpty()) {
-            UserRepresentation user = new UserRepresentation();
-            user.setUsername("viewer");
-            user.setEnabled(true);
-            user.setFirstName("View");
-            user.setLastName("Only");
-            user.setEmail("viewer@example.com");
-            user.setEmailVerified(true);
-            CredentialRepresentation password = new CredentialRepresentation();
-            password.setType(CredentialRepresentation.PASSWORD);
-            password.setValue("viewer");
-            password.setTemporary(false);
-            user.setCredentials(List.of(password));
-            String userId = createdId(realm.users().create(user));
-
+            String userId = createUser("viewer");
             String realmManagement = realm.clients().findByClientId("realm-management").get(0).getId();
             realm.users().get(userId).roles().clientLevel(realmManagement)
                     .add(List.of(realm.clients().get(realmManagement).roles().get("view-clients").toRepresentation()));
         }
         return passwordToken("viewer", "viewer");
+    }
+
+    private static String noRoleToken() throws IOException, InterruptedException {
+        if (realm.users().search("nobody", true).isEmpty()) {
+            createUser("nobody");
+        }
+        return passwordToken("nobody", "nobody");
+    }
+
+    private static String createUser(String username) {
+        UserRepresentation user = new UserRepresentation();
+        user.setUsername(username);
+        user.setEnabled(true);
+        user.setFirstName(username);
+        user.setLastName(username);
+        user.setEmail(username + "@example.com");
+        user.setEmailVerified(true);
+        CredentialRepresentation password = new CredentialRepresentation();
+        password.setType(CredentialRepresentation.PASSWORD);
+        password.setValue(username);
+        password.setTemporary(false);
+        user.setCredentials(List.of(password));
+        return createdId(realm.users().create(user));
     }
 
     private static String clientCredentialsToken(String clientId) throws IOException, InterruptedException {
