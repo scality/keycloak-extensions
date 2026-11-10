@@ -37,8 +37,8 @@ public class LongLivedTokenLimitTest {
         keycloak = FullImageName.createContainer()
                 .withStartupTimeout(Duration.ofMinutes(5))
                 .withProviderClassesFrom("target/classes")
-                .withEnv("KC_SPI_ADMIN_REALM_RESTAPI_EXTENSION__LONG_LIVED_TOKENS__MAX_ACTIVE_TOKENS", "3")
-                .withEnv("KC_SPI_ADMIN_REALM_RESTAPI_EXTENSION__LONG_LIVED_TOKENS__MAX_ACTIVE_TOKENS_PER_CLIENT", "2");
+                .withEnv("KC_SPI_ADMIN_REALM_RESTAPI_EXTENSION_LONG_LIVED_TOKENS_MAX_ACTIVE_TOKENS", "3")
+                .withEnv("KC_SPI_ADMIN_REALM_RESTAPI_EXTENSION_LONG_LIVED_TOKENS_MAX_ACTIVE_TOKENS_PER_CLIENT", "2");
         keycloak.start();
 
         RealmRepresentation realmRepresentation = new RealmRepresentation();

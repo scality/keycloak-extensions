@@ -24,7 +24,10 @@ import org.keycloak.admin.client.Keycloak;
 import org.keycloak.admin.client.resource.RealmResource;
 import org.keycloak.common.crypto.CryptoIntegration;
 import org.keycloak.common.util.MultivaluedHashMap;
+import org.keycloak.crypto.ECDSASignatureVerifierContext;
+import org.keycloak.crypto.KeyType;
 import org.keycloak.crypto.KeyUse;
+import org.keycloak.crypto.KeyWrapper;
 import org.keycloak.crypto.def.DefaultCryptoProvider;
 import org.keycloak.jose.jwk.JSONWebKeySet;
 import org.keycloak.jose.jwk.JWK;
@@ -93,8 +96,8 @@ public class LongLivedTokenTest {
                 .withEnv("KC_DB_USERNAME", "keycloak")
                 .withEnv("KC_DB_PASSWORD", "keycloak")
                 // Raised so this suite never reaches the limits.
-                .withEnv("KC_SPI_ADMIN_REALM_RESTAPI_EXTENSION__LONG_LIVED_TOKENS__MAX_ACTIVE_TOKENS", "100")
-                .withEnv("KC_SPI_ADMIN_REALM_RESTAPI_EXTENSION__LONG_LIVED_TOKENS__MAX_ACTIVE_TOKENS_PER_CLIENT", "100");
+                .withEnv("KC_SPI_ADMIN_REALM_RESTAPI_EXTENSION_LONG_LIVED_TOKENS_MAX_ACTIVE_TOKENS", "100")
+                .withEnv("KC_SPI_ADMIN_REALM_RESTAPI_EXTENSION_LONG_LIVED_TOKENS_MAX_ACTIVE_TOKENS_PER_CLIENT", "100");
         keycloak.start();
 
         Keycloak admin = keycloak.getKeycloakAdminClient();
@@ -611,6 +614,15 @@ public class LongLivedTokenTest {
         for (JWK key : keys.getKeys()) {
             if (kid.equals(key.getKeyId()) && KeyUse.SIG.getSpecName().equals(key.getPublicKeyUse())) {
                 PublicKey publicKey = JWKParser.create(key).toPublicKey();
+                if (KeyType.EC.equals(key.getKeyType())) {
+                    // TokenVerifier.publicKey verifies RSA and HMAC only on Keycloak 26.2.
+                    KeyWrapper ecKey = new KeyWrapper();
+                    ecKey.setKid(kid);
+                    ecKey.setType(KeyType.EC);
+                    ecKey.setAlgorithm(verifier.getHeader().getRawAlgorithm());
+                    ecKey.setPublicKey(publicKey);
+                    return verifier.verifierContext(new ECDSASignatureVerifierContext(ecKey)).verify().getToken();
+                }
                 return verifier.publicKey(publicKey).verify().getToken();
             }
         }
