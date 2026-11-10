@@ -74,12 +74,12 @@ public class LongLivedTokenLimitTest {
         String reporting = createClient("reporting");
 
         String revoked = assertIssued(issue(monitoring, "{\"lifespan\": 3600}"));
-        assertIssued(issue(monitoring, "{\"lifespan\": 3}"));
+        assertIssued(issue(monitoring, "{\"lifespan\": 10}"));
         assertRefused(issue(monitoring, "{\"lifespan\": 3600}"), "Client monitoring");
         assertIssued(issue(backup, "{\"lifespan\": 3600}"));
         assertRefused(issue(reporting, "{\"lifespan\": 3600}"), "The realm");
 
-        Thread.sleep(4000);
+        Thread.sleep(11000);
         assertIssued(issue(monitoring, "{\"lifespan\": 3600}"));
         assertRefused(issue(monitoring, "{\"lifespan\": 3600}"), "Client monitoring");
 
