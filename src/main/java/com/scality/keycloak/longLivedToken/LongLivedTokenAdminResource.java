@@ -70,6 +70,7 @@ public class LongLivedTokenAdminResource {
     static final Duration MIN_LIFESPAN = Duration.ofSeconds(1);
     static final Duration MAX_LIFESPAN = Duration.ofDays(365);
     static final int MAX_LABEL_LENGTH = 255;
+    static final String ALLOW_ATTRIBUTE = "scality.sa.longLivedTokens";
 
     private final KeycloakSession session;
     private final RealmModel realm;
@@ -109,6 +110,7 @@ public class LongLivedTokenAdminResource {
         Duration lifespan = validateLifespan(request.lifespan());
         String label = validateLabel(request.label());
         UserModel serviceAccount = requireServiceAccount(client);
+        requireLongLivedTokensAllowed(client);
         requireRoomForAnotherToken(client);
 
         // The context client drives the client scopes and the signature algorithm, so the token is
@@ -344,6 +346,13 @@ public class LongLivedTokenAdminResource {
             throw new BadRequestException("Client service account is missing or disabled");
         }
         return serviceAccount;
+    }
+
+    private static void requireLongLivedTokensAllowed(ClientModel client) {
+        if (!Boolean.parseBoolean(client.getAttribute(ALLOW_ATTRIBUTE))) {
+            throw new BadRequestException("Client does not allow long-lived tokens; set its " + ALLOW_ATTRIBUTE
+                    + " attribute to true first");
+        }
     }
 
     private AccessToken createAccessToken(ClientModel client, UserModel serviceAccount, Duration lifespan) {

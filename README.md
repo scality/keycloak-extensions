@@ -18,6 +18,7 @@ It removes the needs of updating the truststore and having to restart keycloak s
 An admin can issue an access token for the service account of a client with a lifespan of up to a year, for tools that cannot renew a token:
 `POST /admin/realms/{realm}/long-lived-tokens/clients/{client-uuid}` with `{"lifespan": "30d", "label": "..."}`.
 The token is returned once and recorded in the `LONG_LIVED_TOKEN` registry.
+A client receives long-lived tokens only once an admin sets its `scality.sa.longLivedTokens` attribute to `true`; otherwise issuing answers 400. Turning it off blocks new tokens only: tokens already issued stay valid until they expire or are revoked. On upgrade, every client that already has a token in the registry gets the attribute, unless it is already set.
 
 Each token is signed with a key pair of its own, whose key id is the token's `jti`. The private key is dropped once the token is signed. The public key is published in the realm JWKS by the `long-lived-tokens` key provider (*Realm settings → Keys*), which Keycloak creates on the first issuance.
 

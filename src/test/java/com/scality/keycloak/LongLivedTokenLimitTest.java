@@ -8,6 +8,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.Map;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -24,6 +25,7 @@ import jakarta.ws.rs.core.Response;
 public class LongLivedTokenLimitTest {
 
     private static final String REALM = "long-lived-limit";
+    private static final String ALLOW_ATTRIBUTE = "scality.sa.longLivedTokens";
 
     private static final ObjectMapper objectMapper = new ObjectMapper();
     private static final HttpClient http = HttpClient.newHttpClient();
@@ -55,6 +57,7 @@ public class LongLivedTokenLimitTest {
         client.setPublicClient(false);
         client.setServiceAccountsEnabled(true);
         client.setStandardFlowEnabled(false);
+        client.setAttributes(Map.of(ALLOW_ATTRIBUTE, "true"));
         try (Response response = realm.clients().create(client)) {
             assertEquals(201, response.getStatus());
             String location = response.getLocation().getPath();
