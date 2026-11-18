@@ -55,6 +55,7 @@ public class LongLivedTokenTest {
     private static final long ONE_YEAR = 365L * 24 * 60 * 60;
     private static final long TWO_DAYS = 2L * 24 * 60 * 60;
     private static final String KEY_PROVIDER_TYPE = "org.keycloak.keys.KeyProvider";
+    private static final String ALLOW_ATTRIBUTE = "scality.sa.longLivedTokens";
 
     private static final ObjectMapper objectMapper = new ObjectMapper();
     private static final HttpClient http = HttpClient.newHttpClient();
@@ -432,6 +433,32 @@ public class LongLivedTokenTest {
     }
 
     @Test
+    public void client_that_does_not_allow_long_lived_tokens_is_rejected_until_it_does() throws Exception {
+        String clientUuid = createClientWithoutLongLivedTokens("opt-in-app");
+
+        HttpResponse<String> missing = issue(clientUuid, "{}", adminToken());
+        assertEquals(400, missing.statusCode(), missing.body());
+        assertTrue(missing.body().contains(ALLOW_ATTRIBUTE), missing.body());
+
+        setClientAttribute(clientUuid, ALLOW_ATTRIBUTE, "false");
+        assertEquals(400, issue(clientUuid, "{}", adminToken()).statusCode());
+
+        setClientAttribute(clientUuid, ALLOW_ATTRIBUTE, "true");
+        assertEquals(200, issue(clientUuid, "{\"lifespan\": 3600}", adminToken()).statusCode());
+    }
+
+    @Test
+    public void turning_long_lived_tokens_off_blocks_new_ones_but_keeps_issued_ones_valid() throws Exception {
+        String clientUuid = createClient("opt-out-app", false, true);
+        String jti = verify(issueToken(clientUuid, "{\"lifespan\": 3600}")).getId();
+
+        setClientAttribute(clientUuid, ALLOW_ATTRIBUTE, "false");
+        assertEquals(400, issue(clientUuid, "{}", adminToken()).statusCode());
+        assertFalse(listedToken(clientUuid, jti).get("revoked").asBoolean());
+        assertTrue(certKeyIds().contains(jti));
+    }
+
+    @Test
     public void disabled_client_is_rejected() throws Exception {
         String clientUuid = createClient("disabled-app", false, true);
         ClientRepresentation client = realm.clients().get(clientUuid).toRepresentation();
@@ -441,6 +468,16 @@ public class LongLivedTokenTest {
     }
 
     private static String createClient(String clientId, boolean publicClient, boolean serviceAccount) {
+        return createClient(clientId, publicClient, serviceAccount, serviceAccount);
+    }
+
+    // Created without the attribute rather than updated: an update keeps an attribute it omits.
+    private static String createClientWithoutLongLivedTokens(String clientId) {
+        return createClient(clientId, false, true, false);
+    }
+
+    private static String createClient(String clientId, boolean publicClient, boolean serviceAccount,
+            boolean allowLongLivedTokens) {
         ClientRepresentation client = new ClientRepresentation();
         client.setClientId(clientId);
         client.setEnabled(true);
@@ -448,7 +485,16 @@ public class LongLivedTokenTest {
         client.setServiceAccountsEnabled(serviceAccount);
         client.setStandardFlowEnabled(!serviceAccount);
         client.setSecret(clientId + "-secret");
+        if (allowLongLivedTokens) {
+            client.setAttributes(Map.of(ALLOW_ATTRIBUTE, "true"));
+        }
         return createdId(realm.clients().create(client));
+    }
+
+    private static void setClientAttribute(String clientUuid, String name, String value) {
+        ClientRepresentation client = realm.clients().get(clientUuid).toRepresentation();
+        client.getAttributes().put(name, value);
+        realm.clients().get(clientUuid).update(client);
     }
 
     private static void setAccessTokenAlgorithm(String clientUuid, String algorithm) {
