@@ -78,15 +78,18 @@ public class LongLivedTokenAdminResource {
     private final AdminEventBuilder adminEvent;
     private final int maxActiveTokens;
     private final int maxActiveTokensPerClient;
+    private final LongLivedTokenExpiryMetric expiryMetric;
 
     public LongLivedTokenAdminResource(KeycloakSession session, RealmModel realm, AdminPermissionEvaluator auth,
-            AdminEventBuilder adminEvent, int maxActiveTokens, int maxActiveTokensPerClient) {
+            AdminEventBuilder adminEvent, int maxActiveTokens, int maxActiveTokensPerClient,
+            LongLivedTokenExpiryMetric expiryMetric) {
         this.session = session;
         this.realm = realm;
         this.auth = auth;
         this.adminEvent = adminEvent.resource(ADMIN_EVENT_RESOURCE);
         this.maxActiveTokens = maxActiveTokens;
         this.maxActiveTokensPerClient = maxActiveTokensPerClient;
+        this.expiryMetric = expiryMetric;
     }
 
     @POST
@@ -155,6 +158,7 @@ public class LongLivedTokenAdminResource {
                 .success();
         logOnCommit(String.format("Long-lived token %s issued for client %s in realm %s by user %s, expires at %d",
                 token.getId(), client.getClientId(), realm.getName(), issuer.getId(), token.getExp()));
+        refreshExpiryMetricOnCommit();
 
         return new LongLivedTokenResponse(encoded, token.getId(), token.getExp());
     }
@@ -202,6 +206,7 @@ public class LongLivedTokenAdminResource {
                 .success();
         logOnCommit(String.format("Long-lived token %s of client %s in realm %s revoked by user %s",
                 jti, client.getClientId(), realm.getName(), auth.adminAuth().getUser().getId()));
+        refreshExpiryMetricOnCommit();
     }
 
     @DELETE
@@ -250,6 +255,19 @@ public class LongLivedTokenAdminResource {
             @Override
             protected void commitImpl() {
                 logger.info(message);
+            }
+
+            @Override
+            protected void rollbackImpl() {
+            }
+        });
+    }
+
+    private void refreshExpiryMetricOnCommit() {
+        session.getTransactionManager().enlistAfterCompletion(new AbstractKeycloakTransaction() {
+            @Override
+            protected void commitImpl() {
+                expiryMetric.refreshInNewTransaction(session.getKeycloakSessionFactory());
             }
 
             @Override
