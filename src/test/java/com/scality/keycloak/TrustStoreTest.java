@@ -135,7 +135,7 @@ public class TrustStoreTest {
             throws IOException, UnsupportedOperationException, InterruptedException {
         Network network = Network.newNetwork();
         // S
-        try (GenericContainer openldap = new GenericContainer<>("osixia/openldap:latest")
+        try (GenericContainer openldap = new GenericContainer<>("osixia/openldap:1.5.0")
                 .withCreateContainerCmdModifier(it -> it.withHostName("ldap.local"))
                 .withNetwork(network)
                 .withEnv("LDAP_ORGANISATION", "Scality")
