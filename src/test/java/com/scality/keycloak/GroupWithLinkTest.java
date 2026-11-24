@@ -392,7 +392,7 @@ public class GroupWithLinkTest {
             throws IOException, UnsupportedOperationException, InterruptedException {
         Network network = Network.newNetwork();
         // S
-        try (GenericContainer openldap = new GenericContainer<>("osixia/openldap:latest")
+        try (GenericContainer openldap = new GenericContainer<>("osixia/openldap:1.5.0")
                 .withCreateContainerCmdModifier(it -> it.withHostName("ldap.local"))
                 .withNetwork(network)
                 .withEnv("LDAP_DOMAIN", "ldap.local")
@@ -464,7 +464,7 @@ public class GroupWithLinkTest {
             throws IOException, UnsupportedOperationException, InterruptedException {
         Network network = Network.newNetwork();
         // S
-        try (GenericContainer openldap = new GenericContainer<>("osixia/openldap:latest")
+        try (GenericContainer openldap = new GenericContainer<>("osixia/openldap:1.5.0")
                 .withCreateContainerCmdModifier(it -> it.withHostName("ldap.local"))
                 .withNetwork(network)
                 .withEnv("LDAP_DOMAIN", "ldap.local")
@@ -547,7 +547,7 @@ public class GroupWithLinkTest {
     public void idp_deletion_cleans_groups_and_link_rows()
             throws IOException, UnsupportedOperationException, InterruptedException {
         Network network = Network.newNetwork();
-        try (GenericContainer openldap = new GenericContainer<>("osixia/openldap:latest")
+        try (GenericContainer openldap = new GenericContainer<>("osixia/openldap:1.5.0")
                 .withCreateContainerCmdModifier(it -> it.withHostName("ldap.local"))
                 .withNetwork(network)
                 .withEnv("LDAP_DOMAIN", "ldap.local")
@@ -590,7 +590,7 @@ public class GroupWithLinkTest {
     public void direct_group_deletion_cleans_link_row_via_fk_cascade()
             throws IOException, UnsupportedOperationException, InterruptedException {
         Network network = Network.newNetwork();
-        try (GenericContainer openldap = new GenericContainer<>("osixia/openldap:latest")
+        try (GenericContainer openldap = new GenericContainer<>("osixia/openldap:1.5.0")
                 .withCreateContainerCmdModifier(it -> it.withHostName("ldap.local"))
                 .withNetwork(network)
                 .withEnv("LDAP_DOMAIN", "ldap.local")
@@ -634,7 +634,7 @@ public class GroupWithLinkTest {
     public void existing_kc_group_with_same_name_should_be_linked_on_sync()
             throws IOException, UnsupportedOperationException, InterruptedException {
         Network network = Network.newNetwork();
-        try (GenericContainer openldap = new GenericContainer<>("osixia/openldap:latest")
+        try (GenericContainer openldap = new GenericContainer<>("osixia/openldap:1.5.0")
                 .withCreateContainerCmdModifier(it -> it.withHostName("ldap.local"))
                 .withNetwork(network)
                 .withEnv("LDAP_DOMAIN", "ldap.local")
@@ -693,7 +693,7 @@ public class GroupWithLinkTest {
     public void idp_deletion_does_not_affect_non_linked_groups()
             throws IOException, UnsupportedOperationException, InterruptedException {
         Network network = Network.newNetwork();
-        try (GenericContainer openldap = new GenericContainer<>("osixia/openldap:latest")
+        try (GenericContainer openldap = new GenericContainer<>("osixia/openldap:1.5.0")
                 .withCreateContainerCmdModifier(it -> it.withHostName("ldap.local"))
                 .withNetwork(network)
                 .withEnv("LDAP_DOMAIN", "ldap.local")
